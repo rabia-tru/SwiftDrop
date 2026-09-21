@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive icon FOREGROUND layer (white/orange motorcycle artwork).
+     The artwork sits on the blue gradient in brand_icon_background.xml.
+     The group is translated +6.75 units lower than the legacy version so the
+     mark is optically centered on the viewport center (54,54) — the safe-zone
+     circle every mask shape cuts from the 108x108 canvas. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outer circle background glow -->
+    <path
+        android:fillColor="#1AFFFFFF"
+        android:pathData="M54,54 m-35,0 a35,35 0 1,1 70,0 a35,35 0 1,1 -70,0" />
+
+    <!-- Motorcycle body (artwork vertical center at 54, not 47.25) -->
+    <group
+        android:translateX="24"
+        android:translateY="28.75"
+        android:scaleX="0.7"
+        android:scaleY="0.7">
+
+        <!-- Rear wheel -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M22,58 m-11,0 a11,11 0 1,1 22,0 a11,11 0 1,1 -22,0" />
+        <path
+            android:fillColor="#FF6D00"
+            android:pathData="M22,58 m-6,0 a6,6 0 1,1 12,0 a6,6 0 1,1 -12,0" />
+
+        <!-- Front wheel -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M62,58 m-11,0 a11,11 0 1,1 22,0 a11,11 0 1,1 -22,0" />
+        <path
+            android:fillColor="#FF6D00"
+            android:pathData="M62,58 m-6,0 a6,6 0 1,1 12,0 a6,6 0 1,1 -12,0" />
+
+        <!-- Frame body -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M22,58 L30,38 L55,32 L62,38 L62,52 L22,52 Z" />
+
+        <!-- Fuel tank -->
+        <path
+            android:fillColor="#FF8F00"
+            android:pathData="M32,36 Q42,28 52,34 L48,40 Q38,36 32,36 Z" />
+
+        <!-- Seat -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M28,38 L48,34 L48,38 L28,42 Z" />
+
+        <!-- Handlebar -->
+        <path
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="3"
+            android:pathData="M52,28 L62,22"
+            android:fillColor="#00000000" />
+        <path
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="2"
+            android:pathData="M58,20 L66,20"
+            android:fillColor="#00000000" />
+
+        <!-- Headlight -->
+        <path
+            android:fillColor="#FFEB3B"
+            android:pathData="M62,34 m-4,0 a4,4 0 1,1 8,0 a4,4 0 1,1 -8,0" />
+
+        <!-- Exhaust pipe -->
+        <path
+            android:fillColor="#BDBDBD"
+            android:pathData="M18,52 L24,52 L24,56 L16,56 Z" />
+
+        <!-- Delivery box on back -->
+        <path
+            android:fillColor="#FF6D00"
+            android:pathData="M14,24 L34,24 L34,42 L14,42 Z" />
+
+        <!-- Box stripe -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M18,30 L30,30 L30,34 L18,34 Z" />
+
+        <!-- Box lid -->
+        <path
+            android:fillColor="#E65100"
+            android:pathData="M12,22 L36,22 L36,26 L12,26 Z" />
+
+        <!-- Lightning bolt on box (speed symbol) -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M24,28 L20,36 L24,36 L22,40 L28,32 L24,32 L26,28 Z" />
+
+        <!-- Speed lines -->
+        <path
+            android:strokeColor="#1AFFFFFF"
+            android:strokeWidth="2"
+            android:pathData="M4,36 L12,36"
+            android:fillColor="#00000000" />
+        <path
+            android:strokeColor="#1AFFFFFF"
+            android:strokeWidth="2"
+            android:pathData="M6,42 L14,42"
+            android:fillColor="#00000000" />
+        <path
+            android:strokeColor="#1AFFFFFF"
+            android:strokeWidth="2"
+            android:pathData="M2,48 L10,48"
+            android:fillColor="#00000000" />
+    </group>
+</vector>

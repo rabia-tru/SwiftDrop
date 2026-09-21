@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- White background — matches the Flutter splash screen background -->
+    <item android:drawable="@android:color/white" />
+
+    <!-- Centered app icon, sized to read at ~100dp visible content —
+         the same as Image.asset(width: 150) on the splash screen -->
+    <item android:gravity="center">
+        <bitmap
+            android:src="@drawable/splash_icon"
+            android:gravity="center" />
+    </item>
+</layer-list>

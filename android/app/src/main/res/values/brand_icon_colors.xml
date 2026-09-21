@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Blue brand palette for the adaptive launcher icon layers -->
+<resources>
+    <color name="brand_icon_background_start">#0D47A1</color>
+    <color name="brand_icon_background_end">#1565C0</color>
+</resources>
