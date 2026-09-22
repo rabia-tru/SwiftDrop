@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:ui';
 import 'package:flutter_background_service/flutter_background_service.dart';
-import 'package:flutter_background_service_android/flutter_background_service_android.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -389,7 +388,8 @@ class UnifiedBackgroundService {
 
           etaMinutes = (distanceKm / 20 * 60).round();
           if (etaMinutes < 3) etaMinutes = 3;
-          if (etaMinutes > 60) etaMinutes = 60;
+          // Cap at 45 min — cross-city test pins made the ETA show hours.
+          if (etaMinutes > 45) etaMinutes = 45;
         } catch (_) {}
 
         final prefs = await SharedPreferences.getInstance();

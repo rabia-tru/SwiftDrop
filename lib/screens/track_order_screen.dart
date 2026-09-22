@@ -54,6 +54,11 @@ class _TrackOrderScreenState extends State<TrackOrderScreen> {
         if (!mounted) return;
         if (data['orderId']?.toString() == orderId || data['id']?.toString() == orderId) {
           setState(() {
+            // Business confirmed → show "Preparing" even while the rider
+            // hasn't been assigned yet (status stays 'pending').
+            if (data['businessConfirmed'] == true) {
+              _order['businessConfirmed'] = true;
+            }
             if (data['status'] != null) _order['status'] = data['status'];
             if (data['riderLat'] != null) _order['riderLat'] = data['riderLat'];
             if (data['riderLng'] != null) _order['riderLng'] = data['riderLng'];
@@ -226,23 +231,25 @@ class _OrderStatusTabState extends State<_OrderStatusTab> {
 
   void _startCountdown() async {
     final savedEta = await CustomerBackgroundService.getRemainingEta();
-    if (savedEta != null && savedEta > 0) {
+    if (savedEta != null && savedEta > 0 && savedEta <= 45 * 60) {
       _remainingSeconds = savedEta;
     } else {
-      final riderLat = SafeParse.toDouble(widget.order['riderLat']);
-      final riderLng = SafeParse.toDouble(widget.order['riderLng']);
-      final dropLat = SafeParse.toDouble(widget.order['dropLat'], 31.47);
-      final dropLng = SafeParse.toDouble(widget.order['dropLng'], 74.42);
-
-      if (riderLat != null && riderLng != null) {
-        final eta = EtaCalculator.getEtaInfo(riderLat: riderLat, riderLng: riderLng, destinationLat: dropLat, destinationLng: dropLng);
-        _remainingSeconds = eta.etaMinutes * 60;
-        _riderLat = riderLat;
-        _riderLng = riderLng;
-      }
+      // Status-based baseline: the order isn't at the customer's door yet —
+      // preparation + pickup leg come before the ride to the drop.
+      final status = widget.order['status']?.toString() ?? 'pending';
+      _remainingSeconds = switch (status) {
+        'pending' || 'assigned' => 25 * 60, // preparing + rider to pickup
+        'accepted' => 20 * 60,
+        'picked_up' || 'in_transit' => 12 * 60,
+        _ => 15 * 60,
+      };
     }
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (mounted && _remainingSeconds > 0) setState(() => _remainingSeconds--);
+      if (mounted && _remainingSeconds > 0) {
+        setState(() => _remainingSeconds--);
+      } else if (mounted) {
+        timer.cancel(); // hold at 00:00 instead of counting negative-time bugs
+      }
     });
   }
 
@@ -274,9 +281,18 @@ class _OrderStatusTabState extends State<_OrderStatusTab> {
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }
 
+  /// True once the restaurant accepted the order (live flag or from the
+  /// order payload fetched after the business tapped Accept).
+  bool get _businessConfirmed =>
+      widget.order['businessConfirmed'] == true;
+
   String get _statusLabel {
-    switch (widget.order['status'] ?? 'pending') {
-      case 'pending': return 'Waiting for rider...';
+    final status = widget.order['status'] ?? 'pending';
+    if (status == 'pending' && _businessConfirmed) {
+      return 'Restaurant is preparing your order 👨‍🍳';
+    }
+    switch (status) {
+      case 'pending': return 'Waiting for confirmation...';
       case 'assigned': return 'Rider assigned — heading to pickup';
       case 'accepted': return 'Rider heading to restaurant';
       case 'picked_up': return 'Order picked up — on the way!';
@@ -287,7 +303,9 @@ class _OrderStatusTabState extends State<_OrderStatusTab> {
   }
 
   IconData get _statusIcon {
-    switch (widget.order['status'] ?? 'pending') {
+    final status = widget.order['status'] ?? 'pending';
+    if (status == 'pending' && _businessConfirmed) return Icons.restaurant;
+    switch (status) {
       case 'pending': return Icons.hourglass_empty;
       case 'assigned': return Icons.person_pin;
       case 'accepted': return Icons.motorcycle;
@@ -354,7 +372,11 @@ class _OrderStatusTabState extends State<_OrderStatusTab> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     _buildStep(icon: Icons.check_circle, label: 'Placed', completed: true),
-                    _buildStep(icon: Icons.restaurant, label: 'Preparing', active: _isStatusInRange(1), completed: _isStatusInRange(2)),
+                    // Preparing lights up as soon as the business accepts —
+                    // not only when a rider gets assigned.
+                    _buildStep(icon: Icons.restaurant, label: 'Preparing',
+                      active: _isStatusInRange(1) || (_businessConfirmed && !_isStatusInRange(2)),
+                      completed: _isStatusInRange(2)),
                     _buildStep(icon: Icons.motorcycle, label: 'Picked Up', active: _isStatusInRange(3), completed: _isStatusInRange(4)),
                     _buildStep(icon: Icons.home, label: 'Delivered', active: _isStatusInRange(5), completed: _isStatusInRange(6)),
                   ],

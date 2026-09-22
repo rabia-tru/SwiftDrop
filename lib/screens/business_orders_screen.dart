@@ -5,6 +5,7 @@ import '../services/api_service.dart';
 import '../services/error_helper.dart';
 import '../services/websocket_service.dart';
 import '../widgets/shimmer_loading.dart';
+import '../utils/order_time.dart';
 
 /// SwiftDrop Business Orders — FoodPanda-partner style
 class BusinessOrdersScreen extends StatefulWidget {
@@ -363,10 +364,9 @@ class _BusinessOrdersScreenState extends State<BusinessOrdersScreen>
     final drop = (order['dropAddress'] ?? '').toString();
     final fareRaw = order['fare'];
     final fare = fareRaw != null ? double.tryParse(fareRaw.toString()) ?? 0.0 : 0.0;
-    final createdAt = order['createdAt'] != null ? DateTime.tryParse(order['createdAt'].toString()) : null;
-    final timeStr = createdAt != null
-        ? '${createdAt.hour.toString().padLeft(2, '0')}:${createdAt.minute.toString().padLeft(2, '0')}'
-        : '';
+    // UTC → local conversion via shared helper (raw .hour showed UTC clock,
+    // 5 hours behind Pakistan time).
+    final timeStr = formatOrderDayTime(order['createdAt']);
     final cardColor = isDark ? const Color(0xFF1A1A1A) : Colors.white;
 
     return Container(
@@ -523,9 +523,88 @@ class _BusinessOrdersScreenState extends State<BusinessOrdersScreen>
                 ],
               ),
             ),
+          // Food is PREPARED — tell the assigned rider to come pick it up.
+          // This is the "rider ko kaise pata chale" step: the backend pings
+          // the rider's private socket room and their app notifies them.
+          if (businessConfirmed &&
+              (order['readyNotifiedAt'] ?? '') == '' &&
+              status != 'delivered' &&
+              status != 'cancelled' &&
+              status != 'in_transit')
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () => _markReady(order),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.statusDelivered,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 11),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    elevation: 0,
+                  ),
+                  icon: const Icon(Icons.room_service_rounded, size: 17),
+                  label: const Text('Order Ready — Call Rider', style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800)),
+                ),
+              ),
+            ),
+          if ((order['readyNotifiedAt'] ?? '').toString().isNotEmpty)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Row(
+                children: [
+                  Icon(Icons.notifications_active_rounded, size: 14, color: AppColors.statusDelivered),
+                  SizedBox(width: 6),
+                  Text('Rider notified — food is ready for pickup', style: TextStyle(fontSize: 12, color: AppColors.statusDelivered, fontWeight: FontWeight.w600)),
+                ],
+              ),
+            ),
         ],
       ),
     );
+  }
+
+  /// Food prepared → ping the rider. Backend emits a notification into
+  /// the rider's socket room; the rider's app shows it as a system
+  /// notification + live card update.
+  Future<void> _markReady(dynamic order) async {
+    final id = (order['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    try {
+      await ApiService.markOrderReady(id);
+      if (!mounted) return;
+      setState(() {
+        final idx = _orders.indexWhere((o) => o['id'].toString() == id);
+        if (idx != -1) {
+          _orders[idx]['readyNotifiedAt'] = DateTime.now().toIso8601String();
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Row(children: [
+            Icon(Icons.notifications_active_rounded, color: Colors.white, size: 18),
+            SizedBox(width: 10),
+            Text('Rider notified — food is ready!', style: TextStyle(fontWeight: FontWeight.w600)),
+          ]),
+          backgroundColor: AppColors.statusDelivered,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          margin: const EdgeInsets.all(16),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not notify rider: $e', style: const TextStyle(fontSize: 13)),
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          margin: const EdgeInsets.all(16),
+        ),
+      );
+    }
   }
 
   Future<void> _acceptOrder(dynamic order) async {

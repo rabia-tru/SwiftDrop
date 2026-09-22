@@ -5,10 +5,10 @@ import '../theme/app_colors.dart';
 import '../services/api_service.dart';
 import '../services/error_helper.dart';
 import '../services/favorites_service.dart';
-import 'dart:async';
 import '../services/websocket_service.dart';
 import '../widgets/app_icon_badge.dart';
 import '../widgets/shimmer_loading.dart';
+import '../widgets/dish_filter.dart';
 import 'restaurant_detail_screen.dart';
 
 /// Restaurant data model — from backend Business entity
@@ -148,13 +148,19 @@ class MenuItem {
     // Assign food images based on category for items without images.
     // Everything is read defensively: a single unexpected type (an int id,
     // a null category, imageUrl absent) used to throw and blank the menu.
-    String itemImage = (item['imageUrl'] ?? item['image'] ?? '').toString();
-    if (itemImage.isEmpty) {
-      final cat = (item['category'] ?? '').toString().toLowerCase();
+    String itemImage = (item['imageUrl'] ?? item['image'] ?? '').toString().trim();
+    final cat = (item['category'] ?? '').toString().toLowerCase();
+    // Dead URLs (typos like "bsnsjejdjej", spaces, non-http strings) made
+    // DecorationImage fail silently → grey cards. Anything that isn't a
+    // plausible https URL gets the category fallback image instead.
+    final validImage = itemImage.startsWith('https://') && !itemImage.contains(' ');
+    if (!validImage) {
       itemImage = _getFoodImageForCategory(cat, _foodImages.length);
     }
 
-    final rawCategory = (item['category'] ?? '').toString().trim();
+    final rawCategory = (item['category'] ?? '').toString().trim().isEmpty
+        ? 'Other'
+        : (item['category'] ?? '').toString().trim();
     final tags = item['tags'];
 
     return MenuItem(
@@ -270,6 +276,7 @@ class _RestaurantListScreenState extends State<RestaurantListScreen> {
   final _searchFocus = FocusNode();
   final _bannerController = PageController(viewportFraction: 0.92);
   String _selectedCategory = 'All';
+  DishSort _dishSort = DishSort.relevance;
   List<Restaurant> _restaurants = [];
   bool _loading = true;
   String? _loadError;
@@ -510,12 +517,11 @@ class _RestaurantListScreenState extends State<RestaurantListScreen> {
 
 
 
+  /// Restaurants matching the search query only. When a category chip is
+  /// active the screen shows matching MENU ITEMS instead (see
+  /// [_filteredItems]) — same behavior as the home screen's chips.
   List<Restaurant> get _filteredRestaurants {
     var list = _restaurants;
-
-    if (_selectedCategory != 'All') {
-      list = list.where((r) => r.categories.contains(_selectedCategory)).toList();
-    }
 
     final query = _searchController.text.toLowerCase();
     if (query.isNotEmpty) {
@@ -527,6 +533,31 @@ class _RestaurantListScreenState extends State<RestaurantListScreen> {
     }
 
     return list;
+  }
+
+  /// Menu items (dish + its restaurant) matching the selected category chip.
+  /// Tapping "Desserts" shows dessert dishes, "Drinks" shows drinks — not
+  /// whole restaurants that merely contain them.
+  List<MapEntry<MenuItem, Restaurant>> get _filteredItems {
+    if (_selectedCategory == 'All') return const [];
+    final matchesCategory = categoryMatcher(_selectedCategory);
+    final result = <MapEntry<MenuItem, Restaurant>>[];
+    for (final r in _restaurants) {
+      final query = _searchController.text.toLowerCase();
+      if (query.isNotEmpty) {
+        final restaurantMatches = r.name.toLowerCase().contains(query) ||
+            r.cuisine.toLowerCase().contains(query) ||
+            r.menu.any((m) => m.name.toLowerCase().contains(query));
+        if (!restaurantMatches) continue;
+      }
+      for (final m in r.menu) {
+        if (matchesCategory(m.category) || matchesCategory(m.name)) {
+          result.add(MapEntry(m, r));
+        }
+      }
+    }
+    sortDishes(result, _dishSort);
+    return result;
   }
 
   @override
@@ -560,6 +591,37 @@ class _RestaurantListScreenState extends State<RestaurantListScreen> {
               SliverToBoxAdapter(child: _buildPromoBanners()),
               // Cuisine category icons
               SliverToBoxAdapter(child: _buildCuisineIcons(isDark)),
+              // Category chip active → dishes of that category (same as home)
+              if (_selectedCategory != 'All') ...[
+                SliverToBoxAdapter(child: _buildSectionHeaderWithSort(
+                  _selectedCategory,
+                  textColor,
+                  subtitle: _loading ? null : '${_filteredItems.length} item${_filteredItems.length == 1 ? '' : 's'} found',
+                )),
+                if (_loading)
+                  SliverToBoxAdapter(child: const SizedBox(height: 200))
+                else if (_filteredItems.isEmpty)
+                  SliverToBoxAdapter(child: _buildEmptyState(textColor))
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    sliver: SliverGrid(
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 2,
+                        childAspectRatio: 0.75,
+                        crossAxisSpacing: 12,
+                        mainAxisSpacing: 12,
+                      ),
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          final e = _filteredItems[index];
+                          return DishCard(item: e.key, restaurant: e.value);
+                        },
+                        childCount: _filteredItems.length,
+                      ),
+                    ),
+                  ),
+              ] else ...[
               // Featured/Recommended section
               if (!_loading && _restaurants.isNotEmpty)
                 SliverToBoxAdapter(child: _buildSectionHeader('Featured', textColor)),
@@ -597,83 +659,9 @@ class _RestaurantListScreenState extends State<RestaurantListScreen> {
                     ),
                   ),
                 ),
+              ],
               // Bottom padding
               const SliverToBoxAdapter(child: SizedBox(height: 20)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ━━━ Shimmer Header Skeleton ━━━
-  Widget _buildHeaderSkeleton() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const ShimmerLoading(width: 44, height: 44, borderRadius: BorderRadius.all(Radius.circular(12))),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
-                    ShimmerLoading(width: 120, height: 16, borderRadius: BorderRadius.all(Radius.circular(8))),
-                    SizedBox(height: 6),
-                    ShimmerLoading(width: 80, height: 12, borderRadius: BorderRadius.all(Radius.circular(6))),
-                  ],
-                ),
-              ),
-              const ShimmerLoading(width: 38, height: 38, borderRadius: BorderRadius.all(Radius.circular(10))),
-            ],
-          ),
-          const SizedBox(height: 16),
-          const ShimmerLoading(width: 200, height: 24, borderRadius: BorderRadius.all(Radius.circular(12))),
-          const SizedBox(height: 6),
-          const ShimmerLoading(width: 160, height: 14, borderRadius: BorderRadius.all(Radius.circular(7))),
-        ],
-      ),
-    );
-  }
-
-  // ━━━ Shimmer Search Skeleton ━━━
-  Widget _buildSearchSkeleton() {
-    return const Padding(
-      padding: EdgeInsets.fromLTRB(20, 14, 20, 0),
-      child: ShimmerLoading(width: double.infinity, height: 50, borderRadius: BorderRadius.all(Radius.circular(14))),
-    );
-  }
-
-  // ━━━ Shimmer Banner Skeleton ━━━
-  Widget _buildBannerSkeleton() {
-    return Column(
-      children: const [
-        SizedBox(height: 8),
-        ShimmerLoading(width: double.infinity, height: 130, borderRadius: BorderRadius.all(Radius.circular(16))),
-        SizedBox(height: 10),
-        Center(child: ShimmerLoading(width: 120, height: 6, borderRadius: BorderRadius.all(Radius.circular(3)))),
-      ],
-    );
-  }
-
-  // ━━━ Shimmer Category Skeleton ━━━
-  Widget _buildCategorySkeleton() {
-    return SizedBox(
-      height: 90,
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-        itemCount: 6,
-        itemBuilder: (context, index) => const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 4),
-          child: Column(
-            children: [
-              ShimmerLoading(width: 56, height: 56, borderRadius: BorderRadius.all(Radius.circular(28))),
-              SizedBox(height: 6),
-              ShimmerLoading(width: 40, height: 10, borderRadius: BorderRadius.all(Radius.circular(5))),
             ],
           ),
         ),
@@ -1309,6 +1297,32 @@ class _RestaurantListScreenState extends State<RestaurantListScreen> {
     );
   }
 
+  /// Header for the dish grid shown while a category chip is active —
+  /// count on the left, sort selector on the right.
+  Widget _buildSectionHeaderWithSort(String title, Color textColor, {String? subtitle}) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: textColor)),
+                if (subtitle != null)
+                  Text(subtitle, style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+              ],
+            ),
+          ),
+          DishSortButton(
+            current: _dishSort,
+            onChanged: (s) => setState(() => _dishSort = s),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   // FEATURED RESTAURANTS (horizontal scroll)
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1653,14 +1667,5 @@ class _RestaurantListScreenState extends State<RestaurantListScreen> {
         ],
       ),
     );
-  }
-
-  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  // Fallback Mock Data (for when backend is unavailable)
-  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  List<Restaurant> get _fallbackMockRestaurants {
-    // Return empty list - backend will provide real data
-    return [];
   }
 }

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../theme/app_colors.dart';
-import '../widgets/app_icon_badge.dart';
 import '../services/api_service.dart';
 import '../services/error_helper.dart';
 import '../services/biometric_service.dart';
@@ -96,7 +95,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: const SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
@@ -124,7 +122,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       ),
                       child: Column(
                         children: [
-                          const AppIconBadge(size: 80, padding: 12),
+                          ClipOval(
+                            child: Image.asset(
+                              'assets/icon/app_icon.png',
+                              width: 80,
+                              height: 80,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
                           const SizedBox(height: 16),
                           const Text(
                             'SwiftDrop',
@@ -172,7 +177,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Widget _buildFormContent() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardColor = isDark ? const Color(0xFF1A1A1A) : Colors.white;
-    final textColor = isDark ? Colors.white : AppColors.black;
     final subTextColor = isDark ? const Color(0xFFB0B0B0) : AppColors.darkGray;
 
     return Container(
@@ -289,7 +293,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   Widget _buildVehicleDropdown() {
     return DropdownButtonFormField<String>(
-      value: _vehicleType,
+      initialValue: _vehicleType,
       decoration: InputDecoration(
         labelText: 'Vehicle Type',
         prefixIcon: const Icon(Icons.delivery_dining_rounded, color: AppColors.orange, size: 20),

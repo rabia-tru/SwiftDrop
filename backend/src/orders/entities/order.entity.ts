@@ -82,6 +82,12 @@ export class Order {
   @Column({ nullable: true })
   businessConfirmedAt: Date;
 
+  // Business marked the food as PREPARED and the rider has been told to
+  // come pick it up. Distinct from businessConfirmed: that means "we took
+  // the order", this means "the rider's food is ready NOW".
+  @Column({ type: 'timestamptz', nullable: true, default: null })
+  readyNotifiedAt: Date;
+
   // ─── Business link: which restaurant/store this order belongs to ───
   @Column({ nullable: true })
   businessId: string;

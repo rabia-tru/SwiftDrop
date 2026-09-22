@@ -12,9 +12,17 @@ import 'services/push_notification_service.dart';
 import 'services/websocket_service.dart';
 import 'services/notification_tap_handler.dart';
 import 'services/chat_unread_service.dart';
+import 'services/network_binding_service.dart';
+import 'services/rider_notification_service.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
+  // Global image cache: once a dish photo is downloaded it stays in memory —
+  // scrolling the menu back up or reopening a restaurant no longer
+  // re-downloads anything (big perceived-speed win together with the CDN
+  // crop params added to every Unsplash URL).
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 100 << 20; // 100 MB
+
   // Enable edge-to-edge display and remove white borders
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   
@@ -29,6 +37,10 @@ void main() async {
   
   runApp(const SwiftDropApp());
 
+  // Pin app sockets to WiFi (mobile-data-on no longer breaks LAN backend
+  // access) and re-assert on every app resume.
+  NetworkBindingService.instance.init();
+
   // Unread chat badge tracking (persisted + live via WebSocket stream)
   ChatUnreadService.instance.init();
 
@@ -40,6 +52,10 @@ void main() async {
   WidgetsBinding.instance.addPostFrameCallback((_) async {
     try {
       await PushNotificationService.initialize();
+      // Android 13+ silently drops ALL notifications until the POST_NOTIFICATIONS
+      // permission is granted — this is why notifications "were not coming".
+      // Ask right at startup instead of only when a rider goes online.
+      await PushNotificationService.requestPermissionIfNeeded();
     } catch (_) {}
     
     try {
@@ -60,6 +76,13 @@ void main() async {
     
     try {
       WebSocketService.instance.connect();
+    } catch (_) {}
+
+    // Global rider notifications: order assignments, "food is ready for
+    // pickup" pings and business confirmations become system notifications
+    // + in-app snackbars on ANY screen (not just rider Home).
+    try {
+      RiderNotificationService.instance.start();
     } catch (_) {}
   });
 }

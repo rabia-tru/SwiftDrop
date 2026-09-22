@@ -1,8 +1,8 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'main_navigation.dart';
 import 'package:flutter/services.dart';
 import '../theme/app_colors.dart';
-import 'home_screen.dart';
 
 /// Rider Splash — Delivery/earning theme, white background
 class RiderSplashScreen extends StatefulWidget {
@@ -50,7 +50,7 @@ class _RiderSplashScreenState extends State<RiderSplashScreen>
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
         pageBuilder: (context, animation, secondaryAnimation) =>
-            const HomeScreen(),
+            const MainNavigation(),
         transitionsBuilder: (context, anim, secondaryAnimation, child) =>
             FadeTransition(opacity: anim, child: child),
         transitionDuration: const Duration(milliseconds: 600),

@@ -7,7 +7,7 @@
 // 'http://10.0.2.2:3000/api'
 class AppConfig {
   // Multi-phone testing: both phones connect to the PC over WiFi.
-  // PC LAN IP: 192.168.54.240 (run `ipconfig` to check if it changes)
+  // PC LAN IP: 192.168.100.2 / 192.168.54.240 (run `ipconfig` to check if it changes)
   // USB single-phone testing: use 'http://127.0.0.1:3000/api' + adb reverse
   static const String apiBaseUrl = 'http://192.168.54.240:3000/api';
 

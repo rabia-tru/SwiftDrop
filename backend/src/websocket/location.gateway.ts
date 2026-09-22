@@ -211,8 +211,10 @@ export class LocationGateway {
       dropAddress: order.dropAddress,
       fare: order.fare,
       createdAt: order.createdAt,
+      // Fleet fallback: unassigned riders must also see "food is ready".
+      readyForPickup: !!order?.readyNotifiedAt,
     });
-    console.log(`[WS] New order ${order.id} broadcast to all riders`);
+    console.log(`[WS] New order ${order.id} broadcast to all riders (readyForPickup=${!!order?.readyNotifiedAt})`);
   }
 
   /**
@@ -227,6 +229,21 @@ export class LocationGateway {
       updatedAt: new Date().toISOString(),
     });
     console.log(`[WS] Menu updated for business ${businessId}`);
+  }
+
+  /**
+   * A NEW business just registered. Broadcast globally so every
+   * customer's home screen can pull the fresh restaurant list without
+   * killing/restarting the app.
+   */
+  broadcastNewBusiness(business: { id: string; name: string; category?: string }) {
+    this.server.emit('business:new', {
+      businessId: business.id,
+      name: business.name,
+      category: business.category ?? null,
+      updatedAt: new Date().toISOString(),
+    });
+    console.log(`[WS] New business registered: ${business.name}`);
   }
 
   // ─── Chat ────────────────────────────────────────────────────────
@@ -306,7 +323,10 @@ export class LocationGateway {
       dropAddress: order.dropAddress,
       fare: order.fare,
       status: order.status,
+      // Rider app picks the notification copy from this flag: without it a
+      // "food is ready" ping showed as a generic "New Order Assigned".
+      readyForPickup: !!order?.readyNotifiedAt,
     });
-    console.log(`[WS] Rider ${riderId} notified of order ${order.id}`);
+    console.log(`[WS] Rider ${riderId} notified of order ${order.id} (readyForPickup=${!!order?.readyNotifiedAt})`);
   }
 }

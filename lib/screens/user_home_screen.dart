@@ -15,6 +15,8 @@ import '../services/cart_service.dart';
 import '../widgets/premium_dialogs.dart';
 import '../services/websocket_service.dart';
 import '../services/chat_unread_service.dart';
+import '../utils/order_time.dart';
+import '../widgets/dish_filter.dart';
 import 'role_selection_screen.dart';
 import 'track_order_screen.dart';
 import 'cart_screen.dart';
@@ -134,7 +136,9 @@ class _RestaurantTabState extends State<_RestaurantTab> {
   final _searchController = TextEditingController();
   String _searchQuery = '';
   String? _selectedCategory;
+  DishSort _dishSort = DishSort.relevance;
   StreamSubscription? _menuUpdatedSub;
+  StreamSubscription? _newBusinessSub;
 
   // Food categories — real Unsplash photos for each category, with a
   // Material icon fallback if the image fails to load (no internet, etc).
@@ -158,11 +162,15 @@ class _RestaurantTabState extends State<_RestaurantTab> {
     final ws = WebSocketService.instance;
     ws.connect();
     _menuUpdatedSub = ws.menuUpdatedStream.listen((_) => _loadRestaurants());
+    // A brand-new restaurant registered elsewhere — show it immediately
+    // without the user having to restart the app.
+    _newBusinessSub = ws.newBusinessStream.listen((_) => _loadRestaurants());
   }
 
   @override
   void dispose() {
     _menuUpdatedSub?.cancel();
+    _newBusinessSub?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -293,20 +301,12 @@ class _RestaurantTabState extends State<_RestaurantTab> {
   }
 
   List<Restaurant> get _bestSellers => _restaurants.where((r) => r.rating >= 4.3 || r.isFeatured).toList();
+
+  /// Restaurants matching the search query only. When a category chip is
+  /// active the home screen shows matching MENU ITEMS instead (see
+  /// [_filteredItems]), so this getter intentionally ignores the category.
   List<Restaurant> get _filteredRestaurants {
     var list = _restaurants;
-    if (_selectedCategory != null) {
-      final cat = _selectedCategory!.toLowerCase();
-      list = list.where((r) {
-          final q = cat;
-          if (q == 'drinks') {
-            return r.menu.any((m) => m.category.toLowerCase().contains('drink') || m.name.toLowerCase().contains('cola') || m.name.toLowerCase().contains('water') || m.name.toLowerCase().contains('juice') || m.name.toLowerCase().contains('shake') || m.name.toLowerCase().contains('coffee') || m.name.toLowerCase().contains('chai') || m.name.toLowerCase().contains('lassi'));
-          }
-          return r.cuisine.toLowerCase().contains(q) ||
-              r.categories.any((c) => c.toLowerCase().contains(q)) ||
-              r.menu.any((m) => m.category.toLowerCase().contains(q) || m.name.toLowerCase().contains(q));
-        }).toList();
-    }
     if (_searchQuery.isNotEmpty) {
       final q = _searchQuery.toLowerCase();
       list = list.where((r) =>
@@ -316,6 +316,32 @@ class _RestaurantTabState extends State<_RestaurantTab> {
           r.menu.any((m) => m.name.toLowerCase().contains(q) || m.category.toLowerCase().contains(q))).toList();
     }
     return list;
+  }
+
+  /// Menu items (dish + its restaurant) matching the selected category chip —
+  /// tapping "Dessert" shows desserts, "Drinks" shows cold drinks, etc.
+  List<MapEntry<MenuItem, Restaurant>> get _filteredItems {
+    if (_selectedCategory == null) return const [];
+    final matchesCategory = categoryMatcher(_selectedCategory!);
+    final result = <MapEntry<MenuItem, Restaurant>>[];
+    for (final r in _restaurants) {
+      // The search bar narrows results further when both are active.
+      if (_searchQuery.isNotEmpty) {
+        final q = _searchQuery.toLowerCase();
+        final restaurantMatches = r.name.toLowerCase().contains(q) ||
+            r.cuisine.toLowerCase().contains(q) ||
+            r.categories.any((c) => c.toLowerCase().contains(q)) ||
+            r.menu.any((m) => m.name.toLowerCase().contains(q) || m.category.toLowerCase().contains(q));
+        if (!restaurantMatches) continue;
+      }
+      for (final m in r.menu) {
+        if (matchesCategory(m.category) || matchesCategory(m.name)) {
+          result.add(MapEntry(m, r));
+        }
+      }
+    }
+    sortDishes(result, _dishSort);
+    return result;
   }
 
   @override
@@ -336,33 +362,65 @@ class _RestaurantTabState extends State<_RestaurantTab> {
                   SliverToBoxAdapter(child: _buildHeader(statusBarHeight)),
                   // ─── Category Icons ───
                   SliverToBoxAdapter(child: _buildCategories()),
-                  // ─── Best Seller Section ───
-                  if (_bestSellers.isNotEmpty) ...[
-                    SliverToBoxAdapter(child: _buildSectionHeader('Best Seller', 'View All')),
-                    SliverToBoxAdapter(child: _buildBestSellers()),
-                  ],
-                  // ─── Promo Banner ───
-                  SliverToBoxAdapter(child: _buildPromoBanner()),
-                  // ─── Recommend Section ───
-                  SliverToBoxAdapter(child: _buildSectionHeader('Recommend', '')),
-                  if (_filteredRestaurants.isEmpty && !_loading)
-                    SliverToBoxAdapter(child: _buildEmptyState())
-                  else
-                    SliverPadding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      sliver: SliverGrid(
-                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 2,
-                          childAspectRatio: 0.75,
-                          crossAxisSpacing: 12,
-                          mainAxisSpacing: 12,
-                        ),
-                        delegate: SliverChildBuilderDelegate(
-                          (context, index) => _buildRecommendCard(_filteredRestaurants[index]),
-                          childCount: _filteredRestaurants.length,
+                  if (_selectedCategory == null) ...[
+                    // ─── Default home (no filter): Best Sellers + Promo + Recommend ───
+                    if (_bestSellers.isNotEmpty) ...[
+                      SliverToBoxAdapter(child: _buildSectionHeader('Best Seller', 'View All')),
+                      SliverToBoxAdapter(child: _buildBestSellers()),
+                    ],
+                    SliverToBoxAdapter(child: _buildPromoBanner()),
+                    SliverToBoxAdapter(child: _buildSectionHeader('Recommend', '')),
+                    if (_filteredRestaurants.isEmpty && !_loading)
+                      SliverToBoxAdapter(child: _buildEmptyState())
+                    else
+                      SliverPadding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        sliver: SliverGrid(
+                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 2,
+                            childAspectRatio: 0.75,
+                            crossAxisSpacing: 12,
+                            mainAxisSpacing: 12,
+                          ),
+                          delegate: SliverChildBuilderDelegate(
+                            (context, index) => _buildRecommendCard(_filteredRestaurants[index]),
+                            childCount: _filteredRestaurants.length,
+                          ),
                         ),
                       ),
-                    ),
+                  ] else ...[
+                    // ─── Category filter active: show that category's DISHES ───
+                    SliverToBoxAdapter(child: _buildSectionHeader(
+                      _selectedCategory!,
+                      '',
+                      subtitle: _loading ? null : '${_filteredItems.length} item${_filteredItems.length == 1 ? '' : 's'} found',
+                      trailing: DishSortButton(
+                        current: _dishSort,
+                        onChanged: (s) => setState(() => _dishSort = s),
+                      ),
+                    )),
+                    if (_filteredItems.isEmpty && !_loading)
+                      SliverToBoxAdapter(child: _buildEmptyState())
+                    else
+                      SliverPadding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        sliver: SliverGrid(
+                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 2,
+                            childAspectRatio: 0.75,
+                            crossAxisSpacing: 12,
+                            mainAxisSpacing: 12,
+                          ),
+                          delegate: SliverChildBuilderDelegate(
+                            (context, index) {
+                              final e = _filteredItems[index];
+                              return DishCard(item: e.key, restaurant: e.value);
+                            },
+                            childCount: _filteredItems.length,
+                          ),
+                        ),
+                      ),
+                  ],
                   const SliverToBoxAdapter(child: SizedBox(height: 100)),
                 ],
               ),
@@ -501,24 +559,34 @@ class _RestaurantTabState extends State<_RestaurantTab> {
     );
   }
 
-  Widget _buildSectionHeader(String title, String action) {
+  Widget _buildSectionHeader(String title, String action, {String? subtitle, Widget? trailing}) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppColors.black)),
-          if (action.isNotEmpty)
-            GestureDetector(
-              onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RestaurantListScreen())),
-              child: Row(
-                children: [
-                  Text(action, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.orange)),
-                  const SizedBox(width: 4),
-                  const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: AppColors.orange),
-                ],
-              ),
-            ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Flexible(child: Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppColors.black))),
+              if (trailing != null) trailing
+              else if (action.isNotEmpty)
+                GestureDetector(
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RestaurantListScreen())),
+                  child: Row(
+                    children: [
+                      Text(action, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.orange)),
+                      const SizedBox(width: 4),
+                      const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: AppColors.orange),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+          if (subtitle != null) ...[
+            const SizedBox(height: 2),
+            Text(subtitle, style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+          ],
         ],
       ),
     );
@@ -550,20 +618,20 @@ class _RestaurantTabState extends State<_RestaurantTab> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Food image
+                  // Food image — Image.network with fallback (a dead URL
+                  // must never paint the debug red error box).
                   Expanded(
                     child: Container(
                       width: double.infinity,
-                      decoration: BoxDecoration(
+                      color: AppColors.orangePale,
+                      child: ClipRRect(
                         borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                        image: r.image.isNotEmpty
-                            ? DecorationImage(image: NetworkImage(r.image), fit: BoxFit.cover)
-                            : null,
-                        color: r.image.isEmpty ? AppColors.orangePale : null,
+                        child: r.image.isNotEmpty
+                            ? Image.network(r.image, fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => const Center(
+                                  child: Icon(Icons.restaurant_rounded, size: 40, color: AppColors.orange)))
+                            : const Center(child: Icon(Icons.restaurant_rounded, size: 40, color: AppColors.orange)),
                       ),
-                      child: r.image.isEmpty
-                          ? const Center(child: Icon(Icons.restaurant_rounded, size: 40, color: AppColors.orange))
-                          : null,
                     ),
                   ),
                   // Info
@@ -656,16 +724,15 @@ class _RestaurantTabState extends State<_RestaurantTab> {
               flex: 3,
               child: Container(
                 width: double.infinity,
-                decoration: BoxDecoration(
+                color: AppColors.orangePale,
+                child: ClipRRect(
                   borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                  image: r.image.isNotEmpty
-                      ? DecorationImage(image: NetworkImage(r.image), fit: BoxFit.cover)
-                      : null,
-                  color: r.image.isEmpty ? AppColors.orangePale : null,
+                  child: r.image.isNotEmpty
+                      ? Image.network(r.image, fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => const Center(
+                            child: Icon(Icons.restaurant_rounded, size: 36, color: AppColors.orange)))
+                      : const Center(child: Icon(Icons.restaurant_rounded, size: 36, color: AppColors.orange)),
                 ),
-                child: r.image.isEmpty
-                    ? const Center(child: Icon(Icons.restaurant_rounded, size: 36, color: AppColors.orange))
-                    : null,
               ),
             ),
             // Info
@@ -741,9 +808,22 @@ class _RestaurantTabState extends State<_RestaurantTab> {
             child: const Icon(Icons.restaurant_rounded, size: 40, color: AppColors.orange),
           ),
           const SizedBox(height: 16),
-          const Text('No restaurants found', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          // Category filter active: the message is about that category's
+          // dishes; otherwise it's about restaurants in general.
+          Text(
+            _selectedCategory != null
+                ? 'No $_selectedCategory items found'
+                : 'No restaurants found',
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: 6),
-          Text('Restaurants will appear here once they register', style: TextStyle(fontSize: 14, color: Colors.grey[500]), textAlign: TextAlign.center),
+          Text(
+            _selectedCategory != null
+                ? 'Try another category or tap it again to clear the filter'
+                : 'Restaurants will appear here once they register',
+            style: TextStyle(fontSize: 14, color: Colors.grey[500]),
+            textAlign: TextAlign.center,
+          ),
         ],
       ),
     );
@@ -876,7 +956,11 @@ class _OrdersTabState extends State<_OrdersTab> {
   }
 
   Widget _buildOrderCard(dynamic order, Color textColor, Color subTextColor) {
-    final status = order['status'] ?? 'pending';
+    var status = order['status'] ?? 'pending';
+    // Business accepted but no rider yet → show "preparing" instead of a
+    // misleading "pending" on the customer's order card.
+    final businessConfirmed = order['businessConfirmed'] == true;
+    if (status == 'pending' && businessConfirmed) status = 'preparing';
     final orderId = (order['id'] ?? '').toString();
     final unreadChats = ChatUnreadService.instance.unreadsFor(orderId);
     // Flatten nested rider object so TrackOrderScreen gets name/location
@@ -920,7 +1004,12 @@ class _OrdersTabState extends State<_OrdersTab> {
                     children: [
                       Text(order['pickupAddress'] ?? 'Order', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: textColor)),
                       const SizedBox(height: 2),
-                      Text('Order #${orderId.isNotEmpty && orderId.length > 8 ? orderId.substring(0, 8) : orderId}', style: TextStyle(color: subTextColor, fontSize: 12)),
+                      Text(
+                        'Order #${orderId.isNotEmpty && orderId.length > 8 ? orderId.substring(0, 8) : orderId}'
+                        // Local clock time on the card ("11:32 AM")
+                        '${formatOrderClock(order['createdAt']).isNotEmpty ? '  •  ${formatOrderClock(order['createdAt'])}' : ''}',
+                        style: TextStyle(color: subTextColor, fontSize: 12),
+                      ),
                     ],
                   ),
                 ),
@@ -991,6 +1080,7 @@ class _OrdersTabState extends State<_OrdersTab> {
   IconData _getStatusIcon(String status) {
     switch (status) {
       case 'pending': return Icons.access_time;
+      case 'preparing': return Icons.restaurant; // business accepted
       case 'assigned': return Icons.person;
       case 'accepted': return Icons.done_all;
       case 'picked_up': return Icons.shopping_cart;
@@ -1072,6 +1162,20 @@ class _CartTab extends StatelessWidget {
                             ),
                             child: Row(
                               children: [
+                                // Dish thumbnail (falls back to a food icon
+                                // when the URL is missing or dead).
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Container(
+                                    width: 52, height: 52,
+                                    color: AppColors.orangePale,
+                                    child: (item.imageUrl ?? '').startsWith('https://')
+                                        ? Image.network(item.imageUrl!, fit: BoxFit.cover,
+                                            errorBuilder: (_, __, ___) => const Icon(Icons.restaurant_rounded, size: 24, color: AppColors.orange))
+                                        : const Icon(Icons.restaurant_rounded, size: 24, color: AppColors.orange),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
                                 Expanded(
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1569,7 +1673,7 @@ class _ProfileTabState extends State<_ProfileTab> {
           children: [
             _faqItem('How do I track my order?', 'Open Orders tab and tap your active order to see the rider live on the map.'),
             _faqItem('Can I cancel my order?', 'Yes, tap the order in Orders tab and choose Cancel while it is still pending.'),
-            _faqItem('How do I pay?', 'Choose Cash, Card or UPI at checkout — pay on delivery for cash orders.'),
+            _faqItem('How do I pay?', 'Choose Cash on Delivery or Card at checkout — pay when your order arrives.'),
           ],
         ),
         actions: [
@@ -1601,39 +1705,53 @@ class _ProfileTabState extends State<_ProfileTab> {
     final themeProvider = Provider.of<ThemeProvider>(context, listen: false);
     showModalBottomSheet(
       context: context,
-      backgroundColor: Colors.white,
+      backgroundColor: Colors.transparent,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
       builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Center(
-                child: Container(
-                  width: 40, height: 4,
-                  decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)),
-                ),
+        // ListenableBuilder: the sheet must rebuild when the theme flips,
+        // otherwise the switch never moves and dark mode "looks broken".
+        child: ListenableBuilder(
+          listenable: themeProvider,
+          builder: (ctx, _) {
+            final isDark = themeProvider.isDark;
+            final sheetBg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
+            final titleColor = isDark ? Colors.white : AppColors.black;
+            return Container(
+              decoration: BoxDecoration(
+                color: sheetBg,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
               ),
-              const SizedBox(height: 16),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                secondary: Container(
-                  width: 40, height: 40,
-                  decoration: BoxDecoration(
-                    color: AppColors.orange.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(10),
+              padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40, height: 4,
+                      decoration: BoxDecoration(color: isDark ? Colors.white24 : Colors.grey.shade300, borderRadius: BorderRadius.circular(2)),
+                    ),
                   ),
-                  child: Icon(themeProvider.isDark ? Icons.dark_mode_rounded : Icons.light_mode_rounded, color: AppColors.orange, size: 20),
-                ),
-                title: const Text('Dark Mode', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-                subtitle: Text(themeProvider.isDark ? 'Dark theme on' : 'Light theme on', style: const TextStyle(fontSize: 12, color: AppColors.darkGray)),
-                value: themeProvider.isDark,
-                onChanged: (_) => themeProvider.toggleTheme(),
-                activeThumbColor: AppColors.orange,
+                  const SizedBox(height: 16),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    secondary: Container(
+                      width: 40, height: 40,
+                      decoration: BoxDecoration(
+                        color: AppColors.orange.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(isDark ? Icons.dark_mode_rounded : Icons.light_mode_rounded, color: AppColors.orange, size: 20),
+                    ),
+                    title: Text('Dark Mode', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: titleColor)),
+                    subtitle: Text(isDark ? 'Dark theme on' : 'Light theme on', style: const TextStyle(fontSize: 12, color: AppColors.darkGray)),
+                    value: isDark,
+                    onChanged: (_) => themeProvider.toggleTheme(),
+                    activeThumbColor: AppColors.orange,
+                  ),
+                ],
               ),
-            ],
-          ),
+            );
+          },
         ),
       ),
     );

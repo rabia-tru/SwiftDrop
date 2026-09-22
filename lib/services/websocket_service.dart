@@ -1,6 +1,9 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
+// ignore: library_prefixes
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import '../config/app_config.dart';
+import 'push_notification_service.dart';
 
 /// WebSocket Service — Real-time connection to backend via Socket.IO
 /// Handles order tracking, rider location updates, and status changes
@@ -28,8 +31,32 @@ class WebSocketService {
   final _chatTypingController = StreamController<Map<String, dynamic>>.broadcast();
   final _businessOrderController = StreamController<Map<String, dynamic>>.broadcast();
   final _menuUpdatedController = StreamController<Map<String, dynamic>>.broadcast();
+  // Events addressed to THIS rider's private room (status changes on any
+  // of their orders — includes ones the rider hasn't watched directly).
+  final _riderOrderController = StreamController<Map<String, dynamic>>.broadcast();
+  // A brand-new business registered (global) — customer home refreshes
+  // its restaurant list when this fires.
+  final _newBusinessController = StreamController<Map<String, dynamic>>.broadcast();
 
   Stream<Map<String, dynamic>> get orderStatusStream => _orderStatusController.stream;
+
+  /// Track which orders already got the "Preparing" notification in this
+  /// app session (backend may resend the event; don't spam the user).
+  final Set<String> _businessConfirmedNotified = {};
+
+  /// Fire a local notification when the business confirms an order —
+  /// "Restaurant accepted your order and is preparing it".
+  void _notifyBusinessConfirmed(Map<String, dynamic> data) {
+    final orderId = data['orderId']?.toString();
+    if (orderId == null || orderId.isEmpty) return;
+    if (!_businessConfirmedNotified.add(orderId)) return; // already shown
+    debugPrint('[WebSocket] Business confirmed order $orderId — notifying user');
+    PushNotificationService.showOrderNotification(
+      title: '🍳 Restaurant Accepted!',
+      body: 'Your order is being prepared. A rider will be assigned shortly.',
+      payload: orderId,
+    );
+  }
   Stream<Map<String, dynamic>> get riderLocationStream => _riderLocationController.stream;
   Stream<Map<String, dynamic>> get riderAssignedStream => _riderAssignedController.stream;
   Stream<bool> get connectionStream => _connectionController.stream;
@@ -37,6 +64,13 @@ class WebSocketService {
   Stream<Map<String, dynamic>> get chatMessageStream => _chatMessageController.stream;
   Stream<Map<String, dynamic>> get chatTypingStream => _chatTypingController.stream;
   Stream<Map<String, dynamic>> get businessOrderStream => _businessOrderController.stream;
+
+  /// Live updates for the signed-in rider's own orders (backend emits
+  /// `rider:orderUpdate` into the `rider:<id>` room).
+  Stream<Map<String, dynamic>> get riderOrderStream => _riderOrderController.stream;
+
+  /// A new business just registered (global broadcast).
+  Stream<Map<String, dynamic>> get newBusinessStream => _newBusinessController.stream;
   /// Fires whenever ANY business's menu changes (item added/updated/deleted/
   /// toggled) — carries {businessId, updatedAt}. Screens filter by businessId.
   Stream<Map<String, dynamic>> get menuUpdatedStream => _menuUpdatedController.stream;
@@ -193,7 +227,14 @@ class WebSocketService {
     // Customer room: live updates for my orders
     _socket!.on('customer:orderUpdate', (data) {
       print('[WebSocket] Customer order update: $data');
-      _orderStatusController.add(Map<String, dynamic>.from(data));
+      final d = Map<String, dynamic>.from(data);
+      // Business confirmed ("Preparing") keeps status 'pending' when no
+      // rider is assigned yet — surface it as a distinct in-app
+      // notification so the customer SEES the restaurant accepted.
+      if (d['businessConfirmed'] == true) {
+        _notifyBusinessConfirmed(d);
+      }
+      _orderStatusController.add(d);
     });
 
     // A business's menu changed — lets browsing customers auto-refresh
@@ -201,6 +242,20 @@ class WebSocketService {
     _socket!.on('business:menuUpdated', (data) {
       print('[WebSocket] Menu updated: $data');
       _menuUpdatedController.add(Map<String, dynamic>.from(data));
+    });
+
+    // This rider's private room — any status change on one of their orders.
+    // Backend emits this whenever it broadcasts an order status with the
+    // rider's id attached.
+    _socket!.on('rider:orderUpdate', (data) {
+      print('[WebSocket] Rider order update: $data');
+      _riderOrderController.add(Map<String, dynamic>.from(data));
+    });
+
+    // A new restaurant registered — customer home auto-refreshes.
+    _socket!.on('business:new', (data) {
+      print('[WebSocket] New business: $data');
+      _newBusinessController.add(Map<String, dynamic>.from(data));
     });
 
     _socket!.onError((error) {

@@ -258,6 +258,50 @@ export class OrdersService {
     return this.withRiderLocation(full ?? saved);
   }
 
+  /**
+   * Business says the food is PREPARED — tell the assigned rider to come
+   * pick it up now (and fleet-broadcast if nobody is attached yet).
+   * This is the "user ka order prepare ho gaya, rider ko kaise pata chale"
+   * path: the rider gets a system notification + live feed refresh.
+   */
+  async markReady(orderId: string) {
+    const order = await this.findEntity(orderId);
+    if (order.status === OrderStatus.DELIVERED || order.status === OrderStatus.CANCELLED) {
+      throw new BadRequestException(`Cannot mark a ${order.status} order as ready`);
+    }
+    if (!order.businessConfirmed) {
+      throw new BadRequestException('Accept the order first, then mark it ready');
+    }
+
+    order.readyNotifiedAt = new Date();
+    const saved = await this.orderRepository.save(order);
+    await this.recordHistory(orderId, order.status, 'Business marked the order as ready for pickup');
+
+    const full: any = await this.orderRepository.findOne({
+      where: { id: orderId },
+      relations: { rider: true },
+    });
+
+    if (order.riderId) {
+      // Assigned rider: private room message → app shows a notification.
+      this.locationGateway.notifyRiderOfOrder(order.riderId, full ?? saved);
+    }
+    // Fleet fallback so an unassigned-but-online rider also hears it.
+    if (!order.riderId) {
+      this.locationGateway.broadcastNewOrderToRiders(full ?? saved);
+    }
+    if (full?.customerId) {
+      this.locationGateway.broadcastToCustomer(full.customerId, {
+        orderId,
+        status: full.status,
+        readyForPickup: true,
+        updatedAt: saved.updatedAt.toISOString(),
+      });
+    }
+
+    return this.withRiderLocation(full ?? saved);
+  }
+
   async assignRider(orderId: string, riderId: string) {
     const order = await this.findEntity(orderId);
     if (order.status !== OrderStatus.PENDING) {

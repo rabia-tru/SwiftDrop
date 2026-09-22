@@ -4,10 +4,28 @@
      so it reads at the same size as the icon on the launcher / Flutter splash.
      Drawn white+orange — identical mark to ic_launcher_foreground. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="288dp"
     android:height="288dp"
     android:viewportWidth="288"
     android:viewportHeight="288">
+
+    <!-- Blue brand gradient circle — the same background as the launcher icon,
+         so the splash icon reads as the actual app icon. Without it the white
+         artwork is invisible on the white splash background. -->
+    <path android:pathData="M144,144 m-100,0 a100,100 0 1,1 200,0 a100,100 0 1,1 -200,0">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="44"
+                android:startY="44"
+                android:endX="244"
+                android:endY="244">
+                <item android:offset="0.0" android:color="@color/brand_icon_background_start" />
+                <item android:offset="1.0" android:color="@color/brand_icon_background_end" />
+            </gradient>
+        </aapt:attr>
+    </path>
 
     <!-- Soft white glow disc behind the mark (as on the launcher foreground) -->
     <path

@@ -5,6 +5,24 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 
+Never _handleNetworkException(dynamic e) {
+  if (e is ApiException) throw e;
+  final raw = e.toString().toLowerCase();
+  if (raw.contains('refused') || raw.contains('111')) {
+    throw ApiException('Backend server is not running. Please make sure the server is started.');
+  }
+  if (raw.contains('no route') || raw.contains('unreachable') || raw.contains('timed out') || raw.contains('timeoutexception')) {
+    throw ApiException('Cannot reach backend server. Make sure phone and PC are connected to the same Wi-Fi.');
+  }
+  if (raw.contains('socketexception') || raw.contains('os error')) {
+    throw ApiException('Cannot reach server (${AppConfig.apiBaseUrl}). Please check your connection.');
+  }
+  if (e is HttpException) {
+    throw ApiException('Unable to reach the server: ${e.message}');
+  }
+  throw e;
+}
+
 /// Wrap any HTTP call with timeout and friendly error re-throwing.
 Future<http.Response> _post(String url, Map<String, String> headers, String body) async {
   try {
@@ -13,27 +31,8 @@ Future<http.Response> _post(String url, Map<String, String> headers, String body
       onTimeout: () => throw ApiException('Connection timed out. Please try again.'),
     );
     return res;
-  } on ApiException {
-    rethrow;
-  } on SocketException catch (e) {
-    if (e.message.contains('Connection refused')) {
-      throw ApiException('Server is not running. Please try again later.');
-    }
-    if (e.message.contains('No route to host') || e.message.contains('Network is unreachable')) {
-      throw ApiException('Cannot reach the server. Please check your WiFi connection.');
-    }
-    throw ApiException('No internet connection. Please check your WiFi or mobile data.');
-  } on HttpException catch (e) {
-    throw ApiException('Unable to reach the server: ${e.message}');
   } catch (e) {
-    final raw = e.toString();
-    if (raw.contains('SocketException') || raw.contains('OS Error')) {
-      throw ApiException('No internet connection. Please check your WiFi or mobile data.');
-    }
-    if (raw.contains('TimeoutException') || raw.contains('timed out')) {
-      throw ApiException('Connection timed out. Please try again.');
-    }
-    rethrow;
+    _handleNetworkException(e);
   }
 }
 
@@ -44,22 +43,8 @@ Future<http.Response> _get(String url, Map<String, String> headers) async {
       onTimeout: () => throw ApiException('Connection timed out. Please try again.'),
     );
     return res;
-  } on ApiException {
-    rethrow;
-  } on SocketException catch (e) {
-    if (e.message.contains('Connection refused')) {
-      throw ApiException('Server is not running. Please try again later.');
-    }
-    throw ApiException('No internet connection. Please check your WiFi or mobile data.');
   } catch (e) {
-    final raw = e.toString();
-    if (raw.contains('SocketException')) {
-      throw ApiException('No internet connection. Please check your WiFi or mobile data.');
-    }
-    if (raw.contains('TimeoutException')) {
-      throw ApiException('Connection timed out. Please try again.');
-    }
-    rethrow;
+    _handleNetworkException(e);
   }
 }
 
@@ -70,22 +55,8 @@ Future<http.Response> _patch(String url, Map<String, String> headers, [String? b
       onTimeout: () => throw ApiException('Connection timed out. Please try again.'),
     );
     return res;
-  } on ApiException {
-    rethrow;
-  } on SocketException catch (e) {
-    if (e.message.contains('Connection refused')) {
-      throw ApiException('Server is not running. Please try again later.');
-    }
-    throw ApiException('No internet connection. Please check your WiFi or mobile data.');
   } catch (e) {
-    final raw = e.toString();
-    if (raw.contains('SocketException')) {
-      throw ApiException('No internet connection. Please check your WiFi or mobile data.');
-    }
-    if (raw.contains('TimeoutException')) {
-      throw ApiException('Connection timed out. Please try again.');
-    }
-    rethrow;
+    _handleNetworkException(e);
   }
 }
 
@@ -180,7 +151,9 @@ class ApiService {
       }),
     );
     final data = _handleResponse(res);
-    await _saveSession(data['accessToken'], data['rider']['id']);
+    // role: 'rider' is required so the splash can restore the rider home
+    // after signup (login passes it, register was missing it).
+    await _saveSession(data['accessToken'], data['rider']['id'], role: 'rider');
     return data;
   }
 
@@ -263,6 +236,15 @@ class ApiService {
   static Future<Map<String, dynamic>> businessAcceptOrder(String orderId) async {
     final res = await _patch(
       '${AppConfig.apiBaseUrl}/orders/$orderId/business-accept',
+      await _authHeaders(),
+    );
+    return _handleResponse(res);
+  }
+
+  /// Business: food is prepared — ping the assigned rider to pick it up.
+  static Future<Map<String, dynamic>> markOrderReady(String orderId) async {
+    final res = await _patch(
+      '${AppConfig.apiBaseUrl}/orders/$orderId/ready',
       await _authHeaders(),
     );
     return _handleResponse(res);
@@ -678,13 +660,8 @@ class ApiService {
         onTimeout: () => throw ApiException('Connection timed out. Please try again.'),
       );
       return res;
-    } on ApiException {
-      rethrow;
     } catch (e) {
-      if (e.toString().contains('SocketException')) {
-        throw ApiException('No internet connection. Please check your WiFi or mobile data.');
-      }
-      rethrow;
+      _handleNetworkException(e);
     }
   }
 

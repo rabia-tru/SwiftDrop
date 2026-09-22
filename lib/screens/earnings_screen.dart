@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../theme/app_colors.dart';
-import '../services/api_service.dart';
-import '../services/error_helper.dart';
+import '../services/rider_order_feed.dart';
 
-/// SwiftDrop Earnings — Real data from delivered orders
+/// SwiftDrop Earnings — Real data from delivered orders (live).
+///
+/// Reads from the shared [RiderOrderFeed] so this tab, rider Home and the
+/// Orders tab all show identical numbers and update the instant an order is
+/// delivered — no separate fetch per screen.
 class EarningsScreen extends StatefulWidget {
   const EarningsScreen({super.key});
 
@@ -13,66 +16,59 @@ class EarningsScreen extends StatefulWidget {
 }
 
 class _EarningsScreenState extends State<EarningsScreen> {
-  List<dynamic> _orders = [];
-  bool _loading = true;
-  String? _error;
-
-  double _totalEarnings = 0;
-  double _weeklyEarnings = 0;
-  int _totalDeliveries = 0;
-  int _weeklyDeliveries = 0;
+  final RiderOrderFeed _feed = RiderOrderFeed.instance;
+  double _weeklyGoal = 10; // deliveries per week (progress ring)
 
   @override
   void initState() {
     super.initState();
-    _loadEarnings();
+    // Home already started the shared feed; this tab just listens. A
+    // refresh here covers the case where the tab is the first thing opened.
+    _feed.addListener(_onFeedChanged);
+    _feed.refresh();
   }
 
-  Future<void> _loadEarnings() async {
-    setState(() { _loading = true; _error = null; });
-    try {
-      final orders = await ApiService.getMyOrders();
-      
-      double total = 0;
-      double weekly = 0;
-      int totalDel = 0;
-      int weeklyDel = 0;
-      final now = DateTime.now();
-      final weekAgo = now.subtract(const Duration(days: 7));
+  @override
+  void dispose() {
+    _feed.removeListener(_onFeedChanged);
+    super.dispose();
+  }
 
-      for (final order in orders) {
-        final status = order['status'] ?? '';
-        final fare = double.tryParse((order['fare'] ?? '0').toString()) ?? 0;
-        final createdAt = order['createdAt'] != null 
-            ? DateTime.tryParse(order['createdAt']) 
-            : null;
+  void _onFeedChanged() {
+    if (mounted) setState(() {});
+  }
 
-        if (status == 'delivered') {
-          total += fare;
-          totalDel++;
-          if (createdAt != null && createdAt.isAfter(weekAgo)) {
-            weekly += fare;
-            weeklyDel++;
-          }
-        }
-      }
-
-      if (mounted) {
-        setState(() {
-          _orders = orders.where((o) => o['status'] == 'delivered').toList();
-          _totalEarnings = total;
-          _weeklyEarnings = weekly;
-          _totalDeliveries = totalDel;
-          _weeklyDeliveries = weeklyDel;
-          _loading = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) setState(() {
-        _error = ErrorHelper.getMessage(e);
-        _loading = false;
-      });
+  /// Deliveries per day over the last 7 days (oldest → today).
+  List<int> _last7DayCounts() {
+    final now = DateTime.now();
+    final counts = List<int>.filled(7, 0);
+    for (final o in _feed.deliveredOrders) {
+      final raw = o['createdAt'];
+      final t = raw is DateTime
+          ? raw.toLocal()
+          : DateTime.tryParse(raw?.toString() ?? '')?.toLocal();
+      if (t == null) continue;
+      final daysAgo = now.difference(t).inDays;
+      if (daysAgo >= 0 && daysAgo < 7) counts[6 - daysAgo] += 1;
     }
+    return counts;
+  }
+
+  /// Fare earned per day over the last 7 days, aligned with [_last7DayCounts].
+  List<double> _last7DayEarnings() {
+    final now = DateTime.now();
+    final sums = List<double>.filled(7, 0);
+    for (final o in _feed.deliveredOrders) {
+      final raw = o['createdAt'];
+      final t = raw is DateTime
+          ? raw.toLocal()
+          : DateTime.tryParse(raw?.toString() ?? '')?.toLocal();
+      if (t == null) continue;
+      final fare = double.tryParse((o['fare'] ?? '0').toString()) ?? 0;
+      final daysAgo = now.difference(t).inDays;
+      if (daysAgo >= 0 && daysAgo < 7) sums[6 - daysAgo] += fare;
+    }
+    return sums;
   }
 
   @override
@@ -90,9 +86,12 @@ class _EarningsScreenState extends State<EarningsScreen> {
       statusBarBrightness: Brightness.dark,
     ));
 
+    final loading = _feed.loading && !_feed.loadedOnce;
+    final error = _feed.loadedOnce ? _feed.error : null;
+
     return Scaffold(
       backgroundColor: bgColor,
-      body: _loading
+      body: loading
           ? Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -107,7 +106,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
                 ],
               ),
             )
-          : _error != null
+          : error != null
               ? _buildError(textColor, subTextColor)
               : SafeArea(
                   child: Column(
@@ -115,16 +114,19 @@ class _EarningsScreenState extends State<EarningsScreen> {
                       _buildHeader(context, headerBg, textColor),
                       Expanded(
                         child: RefreshIndicator(
-                          onRefresh: _loadEarnings,
+                          onRefresh: () => _feed.refresh(force: true),
                           color: AppColors.orange,
                           child: SingleChildScrollView(
+                            physics: const AlwaysScrollableScrollPhysics(),
                             padding: const EdgeInsets.symmetric(horizontal: 20),
                             child: Column(
                               children: [
                                 const SizedBox(height: 20),
-                                _buildTotalEarningsCard(context, cardColor, textColor, subTextColor),
+                                _buildTotalEarningsCard(context, textColor),
                                 const SizedBox(height: 16),
                                 _buildWeeklyCard(cardColor, textColor, subTextColor),
+                                const SizedBox(height: 16),
+                                _buildWeeklyChart(cardColor, textColor, subTextColor),
                                 const SizedBox(height: 16),
                                 _buildStatsRow(cardColor, textColor, subTextColor),
                                 const SizedBox(height: 16),
@@ -156,10 +158,10 @@ class _EarningsScreenState extends State<EarningsScreen> {
             const SizedBox(height: 20),
             Text('Oops!', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: textColor)),
             const SizedBox(height: 8),
-            Text(_error!, textAlign: TextAlign.center, style: TextStyle(color: subTextColor, fontSize: 14)),
+            Text(_feed.error ?? '', textAlign: TextAlign.center, style: TextStyle(color: subTextColor, fontSize: 14)),
             const SizedBox(height: 24),
             ElevatedButton.icon(
-              onPressed: _loadEarnings,
+              onPressed: () => _feed.refresh(force: true),
               icon: const Icon(Icons.refresh, size: 16),
               label: const Text('Try Again'),
               style: ElevatedButton.styleFrom(backgroundColor: AppColors.orange, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
@@ -179,23 +181,23 @@ class _EarningsScreenState extends State<EarningsScreen> {
       ),
       child: Row(
         children: [
-          GestureDetector(
-            onTap: () => Navigator.of(context).pop(),
-            child: const Icon(Icons.arrow_back_ios, color: AppColors.orange, size: 20),
-          ),
-          const SizedBox(width: 16),
+          const Icon(Icons.account_balance_wallet_rounded, color: AppColors.orange, size: 22),
+          const SizedBox(width: 12),
           Expanded(child: Text('Earnings', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: textColor))),
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(color: AppColors.orangePale, borderRadius: BorderRadius.circular(8)),
-            child: const Icon(Icons.refresh_rounded, color: AppColors.orange, size: 20),
+          GestureDetector(
+            onTap: () => _feed.refresh(force: true),
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: AppColors.orangePale, borderRadius: BorderRadius.circular(8)),
+              child: const Icon(Icons.refresh_rounded, color: AppColors.orange, size: 20),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildTotalEarningsCard(BuildContext context, Color cardColor, Color textColor, Color subTextColor) {
+  Widget _buildTotalEarningsCard(BuildContext context, Color textColor) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(24),
@@ -224,13 +226,47 @@ class _EarningsScreenState extends State<EarningsScreen> {
           ),
           const SizedBox(height: 20),
           Text(
-            'Rs.${_totalEarnings.toStringAsFixed(0)}',
+            'Rs.${_feed.totalEarnings.toStringAsFixed(0)}',
             style: const TextStyle(color: Colors.white, fontSize: 36, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 4),
           Text(
-            'From $_totalDeliveries deliveries',
+            'From ${_feed.deliveredOrders.length} deliveries',
             style: const TextStyle(color: Colors.white70, fontSize: 13),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(12)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Today', style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 11)),
+                      const SizedBox(height: 2),
+                      Text('Rs.${_feed.todayEarnings.toStringAsFixed(0)}', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(12)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('This Week', style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 11)),
+                      const SizedBox(height: 2),
+                      Text('Rs.${_feed.weeklyEarnings.toStringAsFixed(0)}', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -238,6 +274,15 @@ class _EarningsScreenState extends State<EarningsScreen> {
   }
 
   Widget _buildWeeklyCard(Color cardColor, Color textColor, Color subTextColor) {
+    final weeklyDel = _feed.deliveredOrders.where((o) {
+      final raw = o['createdAt'];
+      final t = raw is DateTime
+          ? raw.toLocal()
+          : DateTime.tryParse(raw?.toString() ?? '')?.toLocal();
+      if (t == null) return false;
+      return DateTime.now().difference(t).inDays < 7;
+    }).length;
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
@@ -256,7 +301,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
                 SizedBox(
                   width: 64, height: 64,
                   child: CircularProgressIndicator(
-                    value: _weeklyDeliveries / 10.0, // Goal of 10 per week
+                    value: (weeklyDel / _weeklyGoal).clamp(0.0, 1.0),
                     strokeWidth: 8,
                     backgroundColor: AppColors.lightGray,
                     valueColor: const AlwaysStoppedAnimation<Color>(AppColors.orange),
@@ -264,7 +309,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
                   ),
                 ),
                 Text(
-                  _weeklyDeliveries.toString(),
+                  weeklyDel.toString(),
                   style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.orange),
                 ),
               ],
@@ -275,15 +320,15 @@ class _EarningsScreenState extends State<EarningsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('This Week', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: textColor)),
+                Text('Weekly Goal', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: textColor)),
                 const SizedBox(height: 4),
                 Text(
-                  'Rs.${_weeklyEarnings.toStringAsFixed(0)}',
-                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: AppColors.orange),
+                  'Rs.${_feed.weeklyEarnings.toStringAsFixed(0)} this week',
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.orange),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '$_weeklyDeliveries deliveries',
+                  '$weeklyDel of ${_weeklyGoal.toStringAsFixed(0)} deliveries',
                   style: TextStyle(fontSize: 12, color: subTextColor),
                 ),
               ],
@@ -294,15 +339,96 @@ class _EarningsScreenState extends State<EarningsScreen> {
     );
   }
 
+  /// 7-day bar chart of deliveries (amount on tap), built from real data.
+  Widget _buildWeeklyChart(Color cardColor, Color textColor, Color subTextColor) {
+    final counts = _last7DayCounts();
+    final earnings = _last7DayEarnings();
+    const dayLabels = ['6d', '5d', '4d', '3d', '2d', '1d', 'Today'];
+    final maxCount = counts.fold(1, (a, b) => a > b ? a : b);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [BoxShadow(color: AppColors.orange.withValues(alpha: 0.06), blurRadius: 12, offset: const Offset(0, 4))],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Last 7 Days', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: textColor)),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 140,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: List.generate(7, (i) {
+                final count = counts[i];
+                final isToday = i == 6;
+                final barHeight = count == 0 ? 4.0 : 18.0 + (count / maxCount) * 96.0;
+                return Expanded(
+                  child: Tooltip(
+                    message: count == 0
+                        ? 'No deliveries'
+                        : '$count deliver${count == 1 ? 'y' : 'ies'} • Rs.${earnings[i].toStringAsFixed(0)}',
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 5),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          if (count > 0)
+                            Text('$count', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: isToday ? AppColors.orange : subTextColor)),
+                          const SizedBox(height: 4),
+                          Container(
+                            width: double.infinity,
+                            height: barHeight,
+                            decoration: BoxDecoration(
+                              color: count == 0
+                                  ? AppColors.lightGray
+                                  : (isToday ? AppColors.orange : AppColors.orangeLight),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: List.generate(7, (i) {
+              return Expanded(
+                child: Text(
+                  dayLabels[i],
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: i == 6 ? FontWeight.w800 : FontWeight.w500,
+                    color: i == 6 ? AppColors.orange : subTextColor,
+                  ),
+                ),
+              );
+            }),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildStatsRow(Color cardColor, Color textColor, Color subTextColor) {
-    final avgEarnings = _totalDeliveries > 0 ? _totalEarnings / _totalDeliveries : 0.0;
+    final delivered = _feed.deliveredOrders;
+    final avgEarnings = delivered.isNotEmpty ? _feed.totalEarnings / delivered.length : 0.0;
     return Row(
       children: [
         Expanded(
           child: _buildStatCard(
             icon: Icons.receipt_long,
             label: 'Total Orders',
-            value: '$_totalDeliveries',
+            value: '${delivered.length}',
             cardColor: cardColor,
             textColor: textColor,
             subTextColor: subTextColor,
@@ -323,8 +449,8 @@ class _EarningsScreenState extends State<EarningsScreen> {
         Expanded(
           child: _buildStatCard(
             icon: Icons.calendar_today,
-            label: 'This Week',
-            value: '$_weeklyDeliveries',
+            label: 'Today',
+            value: '${_feed.todayDeliveries}',
             cardColor: cardColor,
             textColor: textColor,
             subTextColor: subTextColor,
@@ -362,7 +488,8 @@ class _EarningsScreenState extends State<EarningsScreen> {
   }
 
   Widget _buildRecentTransactions(Color cardColor, Color textColor, Color subTextColor) {
-    if (_orders.isEmpty) {
+    final delivered = _feed.deliveredOrders;
+    if (delivered.isEmpty) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -377,7 +504,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
             ),
             child: Column(
               children: [
-                const Icon(Icons.receipt_long, size: 48, color: AppColors.orangePale),
+                const Icon(Icons.receipt_long, size: 48, color: AppColors.orangeLight),
                 const SizedBox(height: 12),
                 Text('No deliveries yet', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: textColor)),
                 const SizedBox(height: 4),
@@ -394,17 +521,21 @@ class _EarningsScreenState extends State<EarningsScreen> {
       children: [
         Text('Recent Deliveries', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: textColor)),
         const SizedBox(height: 12),
-        ..._orders.take(10).map((order) => _buildTransactionItem(order, cardColor, textColor, subTextColor)),
+        ...delivered.take(10).map((order) => _buildTransactionItem(order, cardColor, textColor, subTextColor)),
       ],
     );
   }
 
   Widget _buildTransactionItem(dynamic order, Color cardColor, Color textColor, Color subTextColor) {
     final customerName = order['customerName'] ?? 'Customer';
+    final businessName = order['businessName'];
     final pickup = order['pickupAddress'] ?? 'Pickup';
     final fare = double.tryParse((order['fare'] ?? '0').toString()) ?? 0;
-    final createdAt = order['createdAt'] != null ? DateTime.tryParse(order['createdAt']) : null;
-    
+    final raw = order['createdAt'];
+    final createdAt = raw is DateTime
+        ? raw.toLocal()
+        : DateTime.tryParse(raw?.toString() ?? '');
+
     String timeAgo = '';
     if (createdAt != null) {
       final diff = DateTime.now().difference(createdAt);
@@ -437,7 +568,14 @@ class _EarningsScreenState extends State<EarningsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(customerName, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: textColor)),
+                Text(
+                  businessName != null && businessName.toString().isNotEmpty
+                      ? '$businessName • $customerName'
+                      : customerName,
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: textColor),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
                 const SizedBox(height: 3),
                 Text(pickup, style: TextStyle(fontSize: 12, color: subTextColor), maxLines: 1, overflow: TextOverflow.ellipsis),
               ],

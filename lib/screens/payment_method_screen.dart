@@ -2,9 +2,6 @@ import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 
 /// Payment method types
-enum PaymentMethodType { upi, card, cod }
-
-/// Payment Method Selection Screen — FoodPanda-style
 class PaymentMethodScreen extends StatefulWidget {
   final double totalAmount;
 
@@ -14,9 +11,9 @@ class PaymentMethodScreen extends StatefulWidget {
   State<PaymentMethodScreen> createState() => _PaymentMethodScreenState();
 }
 
+/// Payment Method Selection Screen — FoodPanda-style
 class _PaymentMethodScreenState extends State<PaymentMethodScreen> {
-  PaymentMethodType _selectedMethod = PaymentMethodType.cod;
-  final _upiController = TextEditingController();
+  bool _isCard = false; // false = Cash on Delivery (default)
   final _cardNumberController = TextEditingController();
   final _cardNameController = TextEditingController();
   final _expiryController = TextEditingController();
@@ -25,7 +22,6 @@ class _PaymentMethodScreenState extends State<PaymentMethodScreen> {
 
   @override
   void dispose() {
-    _upiController.dispose();
     _cardNumberController.dispose();
     _cardNameController.dispose();
     _expiryController.dispose();
@@ -33,26 +29,13 @@ class _PaymentMethodScreenState extends State<PaymentMethodScreen> {
     super.dispose();
   }
 
-  void _selectMethod(PaymentMethodType method) {
-    setState(() => _selectedMethod = method);
+  void _selectMethod(bool isCard) {
+    setState(() => _isCard = isCard);
   }
 
   void _confirmPayment() {
-    // Validate based on selected method
-    if (_selectedMethod == PaymentMethodType.upi && _upiController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Please enter your UPI ID'),
-          backgroundColor: AppColors.orangeDark,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          margin: const EdgeInsets.all(16),
-        ),
-      );
-      return;
-    }
-
-    if (_selectedMethod == PaymentMethodType.card) {
+    // Validate card details when card is selected
+    if (_isCard) {
       if (_cardNumberController.text.length < 16) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -73,30 +56,21 @@ class _PaymentMethodScreenState extends State<PaymentMethodScreen> {
   }
 
   Map<String, String> _getPaymentInfo() {
-    switch (_selectedMethod) {
-      case PaymentMethodType.upi:
-        return {
-          'type': 'upi',
-          'label': 'UPI',
-          'detail': _upiController.text,
-          'icon': 'phone_android',
-        };
-      case PaymentMethodType.card:
-        final maskedCard = '•••• ${_cardNumberController.text.substring(max(0, _cardNumberController.text.length - 4))}';
-        return {
-          'type': 'card',
-          'label': 'Card',
-          'detail': '$maskedCard',
-          'icon': 'credit_card',
-        };
-      case PaymentMethodType.cod:
-        return {
-          'type': 'cod',
-          'label': 'Cash on Delivery',
-          'detail': 'Pay Rs.${widget.totalAmount.toStringAsFixed(0)} when delivered',
-          'icon': 'payments',
-        };
+    if (_isCard) {
+      final maskedCard = '•••• ${_cardNumberController.text.substring(max(0, _cardNumberController.text.length - 4))}';
+      return {
+        'type': 'card',
+        'label': 'Card',
+        'detail': '$maskedCard',
+        'icon': 'credit_card',
+      };
     }
+    return {
+      'type': 'cod',
+      'label': 'Cash on Delivery',
+      'detail': 'Pay Rs.${widget.totalAmount.toStringAsFixed(0)} when delivered',
+      'icon': 'payments',
+    };
   }
 
   int max(int a, int b) => a > b ? a : b;
@@ -148,37 +122,18 @@ class _PaymentMethodScreenState extends State<PaymentMethodScreen> {
             Text('Choose Payment Method', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: textColor)),
             const SizedBox(height: 16),
 
-            // UPI Option
-            _buildPaymentOption(
-              cardColor: cardColor,
-              textColor: textColor,
-              subTextColor: subTextColor,
-              type: PaymentMethodType.upi,
-              icon: Icons.phone_android,
-              title: 'UPI',
-              subtitle: 'Google Pay, PhonePe, Paytm, etc.',
-              isSelected: _selectedMethod == PaymentMethodType.upi,
-              onTap: () => _selectMethod(PaymentMethodType.upi),
-            ),
-            if (_selectedMethod == PaymentMethodType.upi) ...[
-              const SizedBox(height: 12),
-              _buildUpiInput(cardColor, textColor),
-            ],
-            const SizedBox(height: 12),
-
             // Card Option
             _buildPaymentOption(
               cardColor: cardColor,
               textColor: textColor,
               subTextColor: subTextColor,
-              type: PaymentMethodType.card,
               icon: Icons.credit_card,
               title: 'Credit / Debit Card',
               subtitle: 'Visa, Mastercard, Rupay',
-              isSelected: _selectedMethod == PaymentMethodType.card,
-              onTap: () => _selectMethod(PaymentMethodType.card),
+              isSelected: _isCard,
+              onTap: () => _selectMethod(true),
             ),
-            if (_selectedMethod == PaymentMethodType.card) ...[
+            if (_isCard) ...[
               const SizedBox(height: 12),
               _buildCardInput(cardColor, textColor, isDark),
             ],
@@ -189,12 +144,11 @@ class _PaymentMethodScreenState extends State<PaymentMethodScreen> {
               cardColor: cardColor,
               textColor: textColor,
               subTextColor: subTextColor,
-              type: PaymentMethodType.cod,
               icon: Icons.payments,
               title: 'Cash on Delivery',
               subtitle: 'Pay when your order arrives',
-              isSelected: _selectedMethod == PaymentMethodType.cod,
-              onTap: () => _selectMethod(PaymentMethodType.cod),
+              isSelected: !_isCard,
+              onTap: () => _selectMethod(false),
             ),
             const SizedBox(height: 32),
 
@@ -249,7 +203,6 @@ class _PaymentMethodScreenState extends State<PaymentMethodScreen> {
     required Color cardColor,
     required Color textColor,
     required Color subTextColor,
-    required PaymentMethodType type,
     required IconData icon,
     required String title,
     required String subtitle,
@@ -305,72 +258,6 @@ class _PaymentMethodScreenState extends State<PaymentMethodScreen> {
                   ? const Icon(Icons.check, color: Colors.white, size: 16)
                   : null,
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildUpiInput(Color cardColor, Color textColor) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: cardColor,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.orange.withValues(alpha: 0.3)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Enter UPI ID', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: textColor)),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _upiController,
-            style: TextStyle(fontSize: 15, color: textColor),
-            decoration: InputDecoration(
-              hintText: 'yourname@upi',
-              hintStyle: TextStyle(color: AppColors.darkGray.withValues(alpha: 0.6)),
-              prefixIcon: const Icon(Icons.account_balance_wallet, color: AppColors.orange, size: 20),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-              filled: true,
-              fillColor: AppColors.lightGray,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            ),
-          ),
-          const SizedBox(height: 10),
-          // Popular UPI apps
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _buildUpiAppChip('Google Pay', Icons.phone_android),
-              _buildUpiAppChip('PhonePe', Icons.phone_android),
-              _buildUpiAppChip('Paytm', Icons.phone_android),
-              _buildUpiAppChip('BHIM', Icons.phone_android),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildUpiAppChip(String name, IconData icon) {
-    return GestureDetector(
-      onTap: () {
-        _upiController.text = '${name.toLowerCase().replaceAll(' ', '')}@upi';
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: AppColors.orangePale.withValues(alpha: 0.5),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 14, color: AppColors.orange),
-            const SizedBox(width: 4),
-            Text(name, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.orange)),
           ],
         ),
       ),

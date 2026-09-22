@@ -82,6 +82,12 @@ export class OrdersController {
     return this.ordersService.businessAccept(id);
   }
 
+  // Business has PREPARED the order — pings the rider to come pick it up.
+  @Patch(':id/ready')
+  markReady(@Param('id') id: string) {
+    return this.ordersService.markReady(id);
+  }
+
   @Patch(':id/address')
   updateAddress(@Param('id') id: string, @Body() dto: UpdateOrderAddressDto) {
     return this.ordersService.updateDropAddress(id, dto.dropAddress);

@@ -1,15 +1,14 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'main_navigation.dart';
 import 'package:flutter/services.dart';
 import '../theme/app_colors.dart';
-import 'onboarding_screen.dart';
 import 'role_selection_screen.dart';
-import 'home_screen.dart';
 import 'user_home_screen.dart' as uh;
 import 'business_home_screen.dart';
 import '../services/api_service.dart';
 import '../services/biometric_service.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+
 
 /// SwiftDrop Splash — same premium style as the customer splash
 /// (white background, floating app icon, gradient title, role chip, dots).
@@ -55,10 +54,6 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   Future<void> _navigateToNext() async {
-    final prefs = await SharedPreferences.getInstance();
-    final done = prefs.getBool('onboarding_complete') ?? false;
-    if (!mounted) return;
-
     final keepSignedIn = await ApiService.isKeepSignedIn();
     final token = await ApiService.getToken();
     final lastRole = await ApiService.getLastLoginRole();
@@ -66,6 +61,7 @@ class _SplashScreenState extends State<SplashScreen>
     Widget destination;
 
     if (keepSignedIn && token != null && lastRole != null) {
+      debugPrint('[SPLASH] session found: role=$lastRole, biometric check...');
       // Check if biometric is enabled — prompt if so
       final biometricEnabled = await BiometricService.isEnabled();
       if (biometricEnabled) {
@@ -88,16 +84,15 @@ class _SplashScreenState extends State<SplashScreen>
         }
       }
       if (lastRole == 'rider') {
-        destination = const HomeScreen();
+        destination = const MainNavigation();
       } else if (lastRole == 'business') {
         destination = const BusinessHomeScreen();
       } else {
         destination = uh.UserHomeScreen();
       }
-    } else if (done) {
-      destination = const RoleSelectionScreen();
     } else {
-      destination = const OnboardingScreen();
+      debugPrint('[SPLASH] -> RoleSelectionScreen');
+      destination = const RoleSelectionScreen();
     }
 
     if (!mounted) return;

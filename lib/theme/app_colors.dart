@@ -29,8 +29,10 @@ class AppColors {
   static const orange = Color(0xFFFF5722);
   static const orangeDark = Color(0xFFE64A19);
   static const deepOrange = Color(0xFFD84315);
-  static const orangeLight = Color(0xFFFF8A65);
-  static const orangePale = Color(0xFFFFCCBC);
+  static const orangeLight = Color(0xFFFF7043);
+  // Warm tint of the BRAND orange (12% mix with white). Previously a
+  // pinkish peach (#FFCCBC) that read as a different hue entirely.
+  static const orangePale = Color(0xFFFFD9C2);
 
   // ─── White & Grays (for contrast only) ─────────────────────
   static const white = Colors.white;
@@ -55,7 +57,7 @@ class AppColors {
   static const background = offWhite;
 
   // ─── Status Colors (Orange tints only) ──────────────────────
-  static const statusPending = Color(0xFFFFCCBC);
+  static const statusPending = Color(0xFFFFD9C2);
   static const statusAssigned = orangeLight;
   static const statusAccepted = orange;
   static const statusPickedUp = orangeDark;

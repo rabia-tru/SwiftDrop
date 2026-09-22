@@ -135,6 +135,7 @@ class _StatusBadgeState extends State<StatusBadge>
       case 'online': return Colors.white;
       case 'offline': return AppColors.darkGray;
       case 'pending': return AppColors.orangeDark;
+      case 'preparing': return Colors.white; // business accepted
       case 'assigned': return AppColors.darkGray;
       case 'accepted': return Colors.white;
       case 'picked_up': return Colors.white;
@@ -150,6 +151,7 @@ class _StatusBadgeState extends State<StatusBadge>
       case 'online': return AppColors.orange;
       case 'offline': return AppColors.lightGray;
       case 'pending': return AppColors.orangePale;
+      case 'preparing': return const Color(0xFF2E7D32); // green like business app
       case 'assigned': return AppColors.lightGray;
       case 'accepted': return AppColors.orange;
       case 'picked_up': return AppColors.orangeLight;
@@ -165,6 +167,7 @@ class _StatusBadgeState extends State<StatusBadge>
       case 'online': return Icons.check_circle;
       case 'offline': return Icons.power_settings_new;
       case 'pending': return Icons.access_time;
+      case 'preparing': return Icons.restaurant; // business accepted
       case 'assigned': return Icons.person;
       case 'accepted': return Icons.done_all;
       case 'picked_up': return Icons.shopping_cart;
@@ -180,6 +183,7 @@ class _StatusBadgeState extends State<StatusBadge>
       case 'picked_up': return 'PICKED UP';
       case 'in_transit': return 'IN TRANSIT';
       case 'pending': return 'PENDING';
+      case 'preparing': return 'PREPARING 🔥'; // business accepted
       case 'assigned': return 'ASSIGNED';
       case 'accepted': return 'ACCEPTED';
       case 'delivered': return 'DELIVERED';

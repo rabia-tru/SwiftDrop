@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../theme/app_colors.dart';
-import '../widgets/app_icon_badge.dart';
 import '../services/api_service.dart';
 import '../services/error_helper.dart';
 import '../widgets/premium_dialogs.dart';
@@ -124,7 +123,14 @@ class _UserLoginScreenState extends State<UserLoginScreen>
                       ),
                       child: Column(
                         children: [
-                          const AppIconBadge(size: 80, padding: 12),
+                          ClipOval(
+                            child: Image.asset(
+                              'assets/icon/app_icon.png',
+                              width: 80,
+                              height: 80,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
                           const SizedBox(height: 16),
                           const Text(
                             'SwiftDrop',

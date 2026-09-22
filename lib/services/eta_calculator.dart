@@ -30,6 +30,15 @@ class EtaCalculator {
     return earthRadius * c;
   }
 
+  /// City radius beyond which the coordinates are considered cross-city /
+  /// mismatched test data (rider in one city, drop in another). Real local
+  /// deliveries are inside this; showing a 6-hour ETA for a food order is
+  /// nonsense, so we clamp instead.
+  static const double _maxSaneDistanceKm = 15.0;
+
+  /// Hard cap on the displayed ETA regardless of distance.
+  static const int _maxEtaMinutes = 45;
+
   /// Calculate ETA based on distance and vehicle type
   /// Returns duration in minutes
   static int calculateEtaMinutes({
@@ -51,11 +60,15 @@ class EtaCalculator {
     // Add 30% buffer for traffic, stops, etc.
     final effectiveSpeed = speed * 0.7;
 
-    // Calculate time in minutes
-    final timeMinutes = (distanceKm / effectiveSpeed) * 60;
+    // Cap absurd distances (cross-city test pins, bad GPS) so the ETA
+    // stays believable — an order never takes hours.
+    final saneDistance = min(distanceKm, _maxSaneDistanceKm);
 
-    // Minimum 1 minute, round up
-    return max(1, timeMinutes.ceil());
+    // Calculate time in minutes
+    final timeMinutes = (saneDistance / effectiveSpeed) * 60;
+
+    // Minimum 1 minute, never above the hard cap
+    return min(max(1, timeMinutes.ceil()), _maxEtaMinutes);
   }
 
   /// Get ETA string like "5 min" or "12 min"

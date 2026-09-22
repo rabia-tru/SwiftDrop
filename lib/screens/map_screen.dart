@@ -628,8 +628,40 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
           onTap: () => _mapController.move(_riderPosition, _mapController.camera.zoom - 1),
           isDark: isDark,
         ),
+        const SizedBox(height: 8),
+        // My Location — GPS se fresh position lekar blue dot pe zoom karta hai
+        _buildZoomButton(
+          icon: _locatingMyLocation ? Icons.location_searching_rounded : Icons.my_location_rounded,
+          onTap: _locateMe,
+          isDark: isDark,
+        ),
       ],
     );
+  }
+
+  bool _locatingMyLocation = false;
+
+  /// Fetches the device's current GPS position and flies the map to it.
+  Future<void> _locateMe() async {
+    if (_locatingMyLocation) return;
+    setState(() => _locatingMyLocation = true);
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 8),
+        ),
+      );
+      final me = LatLng(position.latitude, position.longitude);
+      if (!mounted) return;
+      setState(() => _defaultLocation = me);
+      _mapController.move(me, 16);
+    } catch (_) {
+      // GPS unavailable — keep the camera where it is; the blue dot (if the
+      // earlier fetch succeeded) already shows the last known position.
+    } finally {
+      if (mounted) setState(() => _locatingMyLocation = false);
+    }
   }
 
   Widget _buildZoomButton({required IconData icon, required VoidCallback onTap, required bool isDark}) {

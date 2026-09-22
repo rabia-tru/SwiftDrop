@@ -1,4 +1,3 @@
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../theme/app_colors.dart';
@@ -493,6 +492,23 @@ class _BusinessMenuScreenState extends State<BusinessMenuScreen> {
     // assertion error and shows the red error screen.
     if (!categories.contains(category)) category = categories.first;
 
+    // NEW items never save without an image: if the owner skipped the
+    // photo, seed the field with a small category-appropriate stock photo
+    // so the customer menu always shows a real image (not a grey card).
+    const defaultImages = {
+      'Burgers': 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=400&h=300&fit=crop&auto=format&q=70',
+      'Pizza': 'https://images.unsplash.com/photo-1513104890138-7c749659a591?w=400&h=300&fit=crop&auto=format&q=70',
+      'Chicken': 'https://images.unsplash.com/photo-1626645738196-c2a7c87a8f58?w=400&h=300&fit=crop&auto=format&q=70',
+      'Biryani': 'https://images.unsplash.com/photo-1633945274405-b6c8069047b0?w=400&h=300&fit=crop&auto=format&q=70',
+      'Chinese': 'https://images.unsplash.com/photo-1603133872878-684f208fb84b?w=400&h=300&fit=crop&auto=format&q=70',
+      'Fast Food': 'https://images.unsplash.com/photo-1550547660-d9450f859349?w=400&h=300&fit=crop&auto=format&q=70',
+      'BBQ': 'https://images.unsplash.com/photo-1555939594-58d7cb561ad1?w=400&h=300&fit=crop&auto=format&q=70',
+      'Desserts': 'https://images.unsplash.com/photo-1551024506-0bccd828d307?w=400&h=300&fit=crop&auto=format&q=70',
+      'Drinks': 'https://images.unsplash.com/photo-1541519227354-08fa5d50c44d?w=400&h=300&fit=crop&auto=format&q=70',
+      'Appetizers': 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=400&h=300&fit=crop&auto=format&q=70',
+      'Main Course': 'https://images.unsplash.com/photo-1596797038530-2c107229654b?w=400&h=300&fit=crop&auto=format&q=70',
+    };
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -772,7 +788,9 @@ class _BusinessMenuScreenState extends State<BusinessMenuScreen> {
 
                       setSheetState(() { saving = true; inlineError = null; });
                       try {
-                        final imageUrl = imageUrlController.text.trim().isNotEmpty ? imageUrlController.text.trim() : null;
+                        final imageUrl = imageUrlController.text.trim().isNotEmpty
+                            ? imageUrlController.text.trim()
+                            : (existingItem == null ? (defaultImages[category] ?? defaultImages['Main Course']) : null);
                         
                         if (existingItem != null) {
                           await ApiService.businessUpdateMenuItem(existingItem['id'], {

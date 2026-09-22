@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/app_colors.dart';
 import '../services/api_service.dart';
 import '../services/customer_background_service.dart';
@@ -7,9 +8,9 @@ import 'restaurant_list_screen.dart';
 import '../widgets/premium_dialogs.dart';
 import '../services/error_helper.dart';
 import '../services/cart_service.dart';
-import 'restaurant_detail_screen.dart' show Restaurant;
 import 'track_order_screen.dart';
 import 'payment_method_screen.dart';
+import 'map_picker_screen.dart';
 
 /// SwiftDrop Cart — Review items, apply coupon, checkout
 ///
@@ -36,10 +37,10 @@ class _CartScreenState extends State<CartScreen> {
   Map<String, String>? _selectedPayment;
   int _selectedTip = 0; // 0, 30, 50, 100
 
-  // Real coordinates for the drop point, fetched from the device's GPS.
-  // Previously this screen sent a hardcoded lat/lng for every single order
-  // (always the same fixed point in Lahore) regardless of the address text
-  // the customer typed — so the rider/map always pointed at the wrong spot.
+  // Real coordinates for the drop point — set by the map picker (or GPS
+  // fallback below). Previously this screen sent a hardcoded lat/lng for
+  // every single order regardless of the address text the customer typed
+  // — so the rider/map always pointed at the wrong spot.
   double? _dropLat;
   double? _dropLng;
 
@@ -49,6 +50,40 @@ class _CartScreenState extends State<CartScreen> {
   void initState() {
     super.initState();
     _fetchCurrentLocation();
+    _loadSavedAddress();
+  }
+
+  /// Pre-fill the address field with the user's most recent saved address
+  /// (from the Address screen) so repeat orders don't retype it.
+  Future<void> _loadSavedAddress() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getStringList('saved_addresses_raw');
+      if (saved != null && saved.isNotEmpty && mounted && _addressController.text.isEmpty) {
+        final parts = saved.last.split('|||');
+        if (parts.length >= 3 && parts[2].trim().isNotEmpty) {
+          setState(() => _addressController.text = parts[2]);
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// Open the full-screen map picker. The returned address fills the field
+  /// and the picked coordinates become the order's drop point.
+  Future<void> _openMapPicker() async {
+    final result = await Navigator.of(context).push<Map<String, dynamic>>(
+      MaterialPageRoute(builder: (_) => MapPickerScreen(
+        initialLat: _dropLat,
+        initialLng: _dropLng,
+      )),
+    );
+    if (result != null && mounted) {
+      setState(() {
+        _addressController.text = (result[MapPickerScreen.kAddress] ?? '').toString();
+        _dropLat = (result[MapPickerScreen.kLat] as num?)?.toDouble();
+        _dropLng = (result[MapPickerScreen.kLng] as num?)?.toDouble();
+      });
+    }
   }
 
   Future<void> _fetchCurrentLocation() async {
@@ -166,7 +201,6 @@ class _CartScreenState extends State<CartScreen> {
       final orderItems = _cart.items
           .map((c) => {'name': c.name, 'quantity': c.quantity, 'price': c.price.toInt()})
           .toList();
-      final itemNames = _cart.items.map((c) => '${c.name} x${c.quantity}').join(', ');
 
       // The cart knows which restaurant it belongs to — works no matter
       // which screen opened it (detail-screen cart bar or nav-bar tab).
@@ -191,7 +225,7 @@ class _CartScreenState extends State<CartScreen> {
         businessName: restaurantName,
         items: orderItems,
         paymentMethod: _selectedPayment?['label'] ?? _selectedPayment?['type'],
-        notes: '${_instructionsController.text.isNotEmpty ? "[INSTRUCTIONS: ${_instructionsController.text}] " : ""}${_couponApplied ? "[COUPON: ${_couponController.text.toUpperCase()}] " : ""}${_selectedTip > 0 ? "[TIP: Rs.${_selectedTip}]" : ""}',
+        notes: '${_instructionsController.text.isNotEmpty ? "[INSTRUCTIONS: ${_instructionsController.text}] " : ""}${_couponApplied ? "[COUPON: ${_couponController.text.toUpperCase()}] " : ""}${_selectedTip > 0 ? "[TIP: Rs.$_selectedTip]" : ""}',
       );
 
       if (!mounted) return;
@@ -334,19 +368,55 @@ class _CartScreenState extends State<CartScreen> {
             ],
           ),
           const SizedBox(height: 10),
-          TextField(
-            controller: _addressController,
-            style: TextStyle(fontSize: 14, color: textColor),
-            decoration: InputDecoration(
-              hintText: 'Enter delivery address',
-              hintStyle: TextStyle(color: AppColors.darkGray.withValues(alpha: 0.6)),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppColors.orange, width: 2)),
-              filled: true,
-              fillColor: isDark ? const Color(0xFF252525) : AppColors.lightGray,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              prefixIcon: const Icon(Icons.edit_location_alt, color: AppColors.orange, size: 18),
+          // Tapping opens the map picker — drop the pin at the door and the
+          // address resolves automatically (typing is still possible via
+          // the small edit icon for edge cases).
+          GestureDetector(
+            onTap: _openMapPicker,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF252525) : AppColors.lightGray,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: _addressController.text.isNotEmpty
+                      ? AppColors.orange.withValues(alpha: 0.5)
+                      : Colors.transparent,
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.location_on_rounded, color: AppColors.orange, size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      _addressController.text.isEmpty
+                          ? 'Tap to pick location on map'
+                          : _addressController.text,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: _addressController.text.isEmpty
+                            ? AppColors.darkGray.withValues(alpha: 0.6)
+                            : textColor,
+                      ),
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: _openMapPicker,
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: AppColors.orange.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Icon(Icons.map_rounded, color: AppColors.orange, size: 20),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -400,6 +470,20 @@ class _CartScreenState extends State<CartScreen> {
                   shape: BoxShape.circle,
                 ),
               ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          // Dish thumbnail (falls back to a food icon when the URL is
+          // missing or dead).
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Container(
+              width: 52, height: 52,
+              color: AppColors.orangePale,
+              child: (item.imageUrl ?? '').startsWith('https://')
+                  ? Image.network(item.imageUrl!, fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => const Icon(Icons.restaurant_rounded, size: 24, color: AppColors.orange))
+                  : const Icon(Icons.restaurant_rounded, size: 24, color: AppColors.orange),
             ),
           ),
           const SizedBox(width: 10),
@@ -665,11 +749,9 @@ class _CartScreenState extends State<CartScreen> {
                 child: Row(
                   children: [
                     Icon(
-                      _selectedPayment!['type'] == 'upi'
-                          ? Icons.phone_android
-                          : _selectedPayment!['type'] == 'card'
-                              ? Icons.credit_card
-                              : Icons.payments,
+                      _selectedPayment!['type'] == 'card'
+                          ? Icons.credit_card
+                          : Icons.payments,
                       color: AppColors.orange,
                       size: 22,
                     ),

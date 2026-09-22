@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:provider/provider.dart';
 import '../theme/app_colors.dart';
+import '../utils/order_time.dart';
+import '../services/chat_unread_service.dart';
+import '../services/rider_order_feed.dart';
 import '../widgets/status_badge.dart';
 import '../widgets/shimmer_loading.dart';
 import '../services/api_service.dart';
@@ -10,14 +12,15 @@ import '../services/background_location_service.dart';
 import '../services/rider_background_service.dart';
 import '../services/location_permission_helper.dart';
 import '../services/location_queue_db.dart';
-import '../services/realtime_order_tracker.dart';
 import '../services/push_notification_service.dart';
 import '../services/websocket_service.dart';
 import '../widgets/premium_dialogs.dart';
+import '../widgets/confetti_celebration.dart';
 import '../services/battery_optimization_helper.dart';
 import '../services/error_helper.dart';
 import 'all_orders_screen.dart';
 import 'earnings_screen.dart';
+import 'main_navigation.dart';
 import '../widgets/exit_confirm_dialog.dart';
 
 /// SwiftDrop Rider Home — Premium Dashboard
@@ -34,7 +37,7 @@ class _HomeScreenState extends State<HomeScreen>
   bool _loading = true;
   bool _toggling = false;
   int _pendingSyncCount = 0;
-  List<dynamic> _pendingOrders = [];
+  final RiderOrderFeed _feed = RiderOrderFeed.instance;
   late AnimationController _animController;
 
   StreamSubscription? _newOrderSub;
@@ -47,10 +50,19 @@ class _HomeScreenState extends State<HomeScreen>
       duration: const Duration(milliseconds: 1500),
     )..repeat(reverse: true);
     _loadRider();
-    _loadPendingOrders();
+    // One shared live feed drives Home, Orders AND Earnings: a single
+    // fetch + WebSocket listeners, debounced so bursts of events collapse
+    // into one reload.
+    _feed.startListening();
+    _feed.addListener(_onFeedChanged);
+    _feed.refresh();
     _refreshPendingCount();
     _initTracking();
     _listenForNewOrders();
+  }
+
+  void _onFeedChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _initTracking() async {
@@ -61,7 +73,7 @@ class _HomeScreenState extends State<HomeScreen>
     WebSocketService.instance.connect();
     _newOrderSub = WebSocketService.instance.newOrderStream.listen((order) {
       _showNewOrderNotification(order);
-      _loadPendingOrders();
+      _feed.scheduleRefresh();
     });
     RiderBackgroundService.restoreTrackingState();
   }
@@ -105,7 +117,7 @@ class _HomeScreenState extends State<HomeScreen>
           action: SnackBarAction(
             label: 'VIEW',
             textColor: Colors.white,
-            onPressed: () => _loadPendingOrders(),
+            onPressed: () => _feed.scheduleRefresh(),
           ),
         ),
       );
@@ -116,6 +128,7 @@ class _HomeScreenState extends State<HomeScreen>
   void dispose() {
     _newOrderSub?.cancel();
     _animController.dispose();
+    _feed.removeListener(_onFeedChanged);
     super.dispose();
   }
 
@@ -126,16 +139,6 @@ class _HomeScreenState extends State<HomeScreen>
     } catch (e) {
       if (mounted) setState(() => _loading = false);
     }
-  }
-
-  Future<void> _loadPendingOrders() async {
-    try {
-      final orders = await ApiService.getMyOrders();
-      final pending = orders.where((o) =>
-        o['status'] == 'assigned' || o['status'] == 'accepted'
-      ).toList();
-      if (mounted) setState(() => _pendingOrders = pending);
-    } catch (_) {}
   }
 
   Future<void> _refreshPendingCount() async {
@@ -354,25 +357,25 @@ class _HomeScreenState extends State<HomeScreen>
       body: SafeArea(
         top: false,
         child: RefreshIndicator(
-          onRefresh: _loadRider,
+          onRefresh: () async {
+            await _loadRider();
+            await _feed.refresh(force: true);
+          },
           color: AppColors.orange,
           child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 SizedBox(height: statusBarHeight + 16),
                 _buildHeader(textColor, subTextColor, statusBarHeight),
-                const SizedBox(height: 20),
+                const SizedBox(height: 16),
+                _buildTodayStrip(cardColor, textColor, subTextColor),
+                const SizedBox(height: 16),
                 _buildStatusCard(cardColor, textColor, subTextColor),
                 const SizedBox(height: 16),
-                _buildProgressStepper(cardColor, textColor, subTextColor),
-                const SizedBox(height: 16),
-                _buildActiveOrders(cardColor, textColor, subTextColor),
-                if (_pendingOrders.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  _buildPendingOrdersSection(cardColor, textColor, subTextColor),
-                ],
+                _buildOrderFeedSection(cardColor, textColor, subTextColor),
                 const SizedBox(height: 16),
                 _buildQuickActions(cardColor, textColor, subTextColor),
                 if (_pendingSyncCount > 0) ...[
@@ -493,150 +496,16 @@ class _HomeScreenState extends State<HomeScreen>
         ],
       ),
     );
-  }
-
-  Widget _buildProgressStepper(Color cardColor, Color textColor, Color subTextColor) {
-    final steps = [
-      {'label': 'Offline', 'icon': Icons.power_settings_new, 'active': !_isOnline},
-      {'label': 'Tracking', 'icon': Icons.gps_fixed, 'active': _isOnline},
-      {'label': 'Delivering', 'icon': Icons.local_shipping, 'active': _rider?['status'] == 'on_delivery'},
-    ];
+  }  /// Compact today strip: earnings + deliveries, sourced from the shared
+  /// live feed — same numbers the Earnings tab shows.
+  Widget _buildTodayStrip(Color cardColor, Color textColor, Color subTextColor) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: _cardDecoration(cardColor),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Quick Status', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: textColor)),
-          const SizedBox(height: 20),
-          Row(
-            children: List.generate(steps.length * 2 - 1, (index) {
-              if (index.isOdd) {
-                final isActive = steps[index ~/ 2]['active'] as bool;
-                return Expanded(child: Container(height: 2, color: isActive ? AppColors.orange : AppColors.gray));
-              }
-              final step = steps[index ~/ 2];
-              final isActive = step['active'] as bool;
-              return Column(
-                children: [
-                  Container(
-                    width: 40, height: 40,
-                    decoration: BoxDecoration(
-                      color: isActive ? AppColors.orange : AppColors.lightGray,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(step['icon'] as IconData, size: 20, color: isActive ? Colors.white : AppColors.darkGray),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(step['label'] as String, style: TextStyle(fontSize: 10, fontWeight: isActive ? FontWeight.w700 : FontWeight.w500, color: isActive ? textColor : subTextColor)),
-                ],
-              );
-            }),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildActiveOrders(Color cardColor, Color textColor, Color subTextColor) {
-    return Consumer<RealtimeOrderTracker>(
-      builder: (context, tracker, child) {
-        if (!tracker.isTracking || tracker.order == null) return const SizedBox.shrink();
-        final order = tracker.order!;
-        final status = order['status'] ?? 'pending';
-
-        return Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            gradient: AppColors.primaryGradient,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [BoxShadow(color: AppColors.orange.withValues(alpha: 0.3), blurRadius: 15, offset: const Offset(0, 8))],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(8)),
-                    child: const Icon(Icons.local_shipping, color: Colors.white, size: 20),
-                  ),
-                  const SizedBox(width: 12),
-                  const Expanded(child: Text('Active Delivery', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700))),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(12)),
-                    child: Text(status.toUpperCase(), style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: LinearProgressIndicator(
-                  value: tracker.statusProgress,
-                  backgroundColor: Colors.white.withValues(alpha: 0.3),
-                  valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
-                  minHeight: 6,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('Order #${(order['id'] ?? '').toString().substring(0, 8)}', style: const TextStyle(color: Colors.white70, fontSize: 13)),
-                  Text('${order['dropAddress'] ?? 'Delivery'}', style: const TextStyle(color: Colors.white70, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
-                ],
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildPendingOrdersSection(Color cardColor, Color textColor, Color subTextColor) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: _cardDecoration(cardColor),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(color: AppColors.orangePale, borderRadius: BorderRadius.circular(8)),
-                child: const Icon(Icons.pending_actions, color: AppColors.orange, size: 18),
-              ),
-              const SizedBox(width: 10),
-              Text('Pending Orders (${_pendingOrders.length})', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: textColor)),
-            ],
-          ),
-          const SizedBox(height: 12),
-          ..._pendingOrders.take(5).map((order) => _buildPendingOrderItem(order, textColor, subTextColor)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPendingOrderItem(dynamic order, Color textColor, Color subTextColor) {
-    final status = order['status'] ?? 'assigned';
-    final customerName = order['customerName'] ?? 'Customer';
-    final pickup = order['pickupAddress'] ?? 'Pickup';
-    final drop = order['dropAddress'] ?? 'Drop';
-    final fare = double.tryParse((order['fare'] ?? '0').toString()) ?? 0;
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
-        color: AppColors.orangePale.withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(12),
+        gradient: AppColors.primaryGradient,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [BoxShadow(color: AppColors.orange.withValues(alpha: 0.25), blurRadius: 12, offset: const Offset(0, 6))],
       ),
       child: Row(
         children: [
@@ -644,77 +513,403 @@ class _HomeScreenState extends State<HomeScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Flexible(child: Text(customerName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: textColor))),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: status == 'assigned' ? AppColors.lightGray : AppColors.orange,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(status.toUpperCase(), style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: status == 'assigned' ? AppColors.darkGray : Colors.white)),
-                    ),
-                  ],
-                ),
+                Text('TODAY', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white.withValues(alpha: 0.8), letterSpacing: 1.2)),
                 const SizedBox(height: 4),
-                Text('$pickup → $drop', style: TextStyle(fontSize: 12, color: subTextColor), maxLines: 1, overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 2),
-                Text('Rs.${fare.toStringAsFixed(0)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.orange)),
+                Text('Rs.${_feed.todayEarnings.toStringAsFixed(0)}', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: Colors.white)),
+                Text('${_feed.todayDeliveries} delivered today', style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.8))),
               ],
             ),
           ),
-          if (status == 'assigned')
-            ElevatedButton(
-              onPressed: () async {
-                // Accepting is a commitment — confirm first and show the
-                // route + fare so the rider knows what they're taking on.
-                final confirmed = await PremiumDialogs.showConfirm(
-                  context,
-                  title: 'Accept Order?',
-                  message:
-                      'Pickup: ${order['pickupAddress'] ?? 'Restaurant'}\nDrop: ${order['dropAddress'] ?? 'Customer'}\nFare: Rs.${order['fare'] ?? 0}',
-                  confirmText: 'Accept',
-                  icon: Icons.local_shipping_rounded,
-                );
-                if (!confirmed) return;
-                if (!mounted) return;
-                try {
-                  await ApiService.updateOrderStatus(order['id'], 'accepted');
-                  // Link GPS pings to this order so customers see live location
-                  await BackgroundLocationService.setCurrentOrder(order['id']?.toString());
-                  // Start background order tracking (status notifications even
-                  // when the app is killed) — same as the Orders screen does.
-                  await RiderBackgroundService.startTracking(orderId: order['id']?.toString());
-                  _loadPendingOrders();
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: const Row(children: [Icon(Icons.check_circle, color: Colors.white, size: 18), SizedBox(width: 12), Text('Order accepted!')]),
-                        backgroundColor: AppColors.orange,
-                        behavior: SnackBarBehavior.floating,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        margin: const EdgeInsets.all(16),
-                      ),
-                    );
-                  }
-                } catch (e) {
-                  if (mounted) PremiumDialogs.showError(context, ErrorHelper.getMessage(e));
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.orange,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                minimumSize: Size.zero,
+          GestureDetector(
+            onTap: () => _switchToTab(2, const EarningsScreen()),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(12)),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.account_balance_wallet_rounded, color: Colors.white, size: 18),
+                  SizedBox(width: 6),
+                  Text('Earnings', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
+                ],
               ),
-              child: const Text('Accept', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
             ),
+          ),
         ],
       ),
     );
+  }
+
+  /// Live order feed: assigned (needs action) + active (accepted → in
+  /// transit) deliveries, driven by the shared RiderOrderFeed. Updates
+  /// arrive over WebSocket without leaving this screen.
+  Widget _buildOrderFeedSection(Color cardColor, Color textColor, Color subTextColor) {
+    final assigned = _feed.assignedOrders;
+    final active = _feed.activeOrders;
+
+    if (_feed.loading && !_feed.loadedOnce) {
+      return _cardShell(
+        cardColor,
+        const Column(children: [OrderCardSkeleton(), SizedBox(height: 12), OrderCardSkeleton()]),
+      );
+    }
+    if (_feed.error != null && _feed.orders.isEmpty) {
+      return _cardShell(cardColor, _buildFeedError(subTextColor));
+    }
+    if (assigned.isEmpty && active.isEmpty) {
+      return _cardShell(cardColor, _buildFeedEmpty(textColor, subTextColor));
+    }
+
+    return ListenableBuilder(
+      listenable: ChatUnreadService.instance,
+      builder: (context, _) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(color: AppColors.orangePale, borderRadius: BorderRadius.circular(8)),
+                child: const Icon(Icons.local_shipping_rounded, color: AppColors.orange, size: 18),
+              ),
+              const SizedBox(width: 10),
+              Text('Orders (${assigned.length + active.length})', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: textColor)),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => _switchToTab(1, const AllOrdersScreen()),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('View all', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.orange)),
+                    SizedBox(width: 2),
+                    Icon(Icons.chevron_right_rounded, size: 16, color: AppColors.orange),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ...assigned.map((o) => _buildLiveOrderCard(o, cardColor, textColor, subTextColor)),
+          ...active.map((o) => _buildLiveOrderCard(o, cardColor, textColor, subTextColor)),
+        ],
+      ),
+    );
+  }
+
+  Widget _cardShell(Color cardColor, Widget child) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: _cardDecoration(cardColor),
+      child: child,
+    );
+  }
+
+  Widget _buildFeedEmpty(Color textColor, Color subTextColor) {
+    return Column(
+      children: [
+        Container(
+          width: 64, height: 64,
+          decoration: const BoxDecoration(color: AppColors.orangePale, shape: BoxShape.circle),
+          child: const Icon(Icons.delivery_dining_rounded, size: 32, color: AppColors.orange),
+        ),
+        const SizedBox(height: 12),
+        Text('No orders yet', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: textColor)),
+        const SizedBox(height: 4),
+        Text('New deliveries assigned to you appear here live', style: TextStyle(fontSize: 12, color: subTextColor), textAlign: TextAlign.center),
+      ],
+    );
+  }
+
+  Widget _buildFeedError(Color subTextColor) {
+    return Column(
+      children: [
+        const Icon(Icons.wifi_off_rounded, size: 36, color: AppColors.orange),
+        const SizedBox(height: 10),
+        Text(_feed.error ?? 'Something went wrong', style: TextStyle(fontSize: 13, color: subTextColor), textAlign: TextAlign.center),
+        const SizedBox(height: 10),
+        TextButton.icon(
+          onPressed: () => _feed.refresh(force: true),
+          icon: const Icon(Icons.refresh_rounded, size: 16),
+          label: const Text('Retry'),
+          style: TextButton.styleFrom(foregroundColor: AppColors.orange),
+        ),
+      ],
+    );
+  }
+
+  double _fareOf(dynamic o) => double.tryParse((o['fare'] ?? '0').toString()) ?? 0;
+
+  static const Map<String, String> _nextStatus = {
+    'assigned': 'accepted',
+    'accepted': 'picked_up',
+    'picked_up': 'in_transit',
+    'in_transit': 'delivered',
+  };
+
+  static const Map<String, String> _nextActionLabel = {
+    'assigned': 'Accept Order',
+    'accepted': 'Mark Picked Up',
+    'picked_up': 'Start Delivery',
+    'in_transit': 'Mark Delivered',
+  };
+
+  static const Map<String, IconData> _nextActionIcon = {
+    'assigned': Icons.check_circle_outline,
+    'accepted': Icons.shopping_bag_outlined,
+    'picked_up': Icons.local_shipping_rounded,
+    'in_transit': Icons.task_alt_rounded,
+  };
+
+  /// A real order card: business, items, addresses, progress stepper and
+  /// the single next action for its status.
+  Widget _buildLiveOrderCard(dynamic order, Color cardColor, Color textColor, Color subTextColor) {
+    final orderId = (order['id'] ?? '').toString();
+    final status = (order['status'] ?? 'assigned').toString();
+    final businessName = (order['businessName'] ?? 'Order').toString();
+    final items = (order['items'] as List?) ?? const [];
+    final unreadChats = ChatUnreadService.instance.unreadsFor(orderId);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: _cardDecoration(cardColor),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Row 1: business + order id + unread chats + status badge
+          Row(
+            children: [
+              Container(
+                width: 42, height: 42,
+                decoration: BoxDecoration(gradient: AppColors.primaryGradient, borderRadius: BorderRadius.circular(12)),
+                child: const Icon(Icons.storefront_rounded, color: Colors.white, size: 20),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(businessName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: textColor)),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Order #${orderId.length > 8 ? orderId.substring(0, 8) : orderId}'
+                      '${formatOrderTimeAgo(order['createdAt']).isNotEmpty ? '  •  ${formatOrderTimeAgo(order['createdAt'])}' : ''}',
+                      style: TextStyle(fontSize: 11, color: subTextColor),
+                    ),
+                  ],
+                ),
+              ),
+              if (unreadChats > 0)
+                Container(
+                  margin: const EdgeInsets.only(right: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(color: AppColors.orange, borderRadius: BorderRadius.circular(12)),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.chat_bubble_rounded, size: 12, color: Colors.white),
+                      const SizedBox(width: 4),
+                      Text('$unreadChats', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white)),
+                    ],
+                  ),
+                ),
+              StatusBadge(status: status),
+            ],
+          ),
+          // Row 2: item summary from the order snapshot
+          if (items.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(
+              '${items.map((i) => '${(i['name'] ?? 'Item')} × ${i['quantity'] ?? 1}').take(3).join(', ')}'
+              '${items.length > 3 ? '  +${items.length - 3} more' : ''}',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12, color: subTextColor),
+            ),
+          ],
+          // Row 3: pickup → drop
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(color: AppColors.orangePale.withValues(alpha: 0.3), borderRadius: BorderRadius.circular(10)),
+            child: Column(
+              children: [
+                Row(children: [
+                  Container(width: 8, height: 8, decoration: const BoxDecoration(color: AppColors.orange, shape: BoxShape.circle)),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text((order['pickupAddress'] ?? 'Pickup').toString(), style: TextStyle(fontSize: 13, color: textColor), maxLines: 1, overflow: TextOverflow.ellipsis)),
+                ]),
+                const SizedBox(height: 6),
+                Row(children: [
+                  Container(width: 8, height: 8, decoration: BoxDecoration(color: AppColors.orangeDark, borderRadius: BorderRadius.circular(2))),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text((order['dropAddress'] ?? 'Drop').toString(), style: TextStyle(fontSize: 13, color: textColor), maxLines: 1, overflow: TextOverflow.ellipsis)),
+                ]),
+              ],
+            ),
+          ),
+          // Row 4: progress dots
+          const SizedBox(height: 12),
+          _buildStatusStepper(status),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Text('Fare', style: TextStyle(fontSize: 12, color: subTextColor)),
+              const Spacer(),
+              Text('Rs.${_fareOf(order).toStringAsFixed(0)}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: AppColors.orange)),
+            ],
+          ),
+          // Row 5: the single next action for this status
+          const SizedBox(height: 10),
+          _buildNextAction(order, status, _feed.isUpdating(orderId)),
+        ],
+      ),
+    );
+  }
+
+  /// 4-step progress: Accepted → Picked Up → In Transit → Delivered.
+  Widget _buildStatusStepper(String status) {
+    final stepIndex = switch (status) {
+      'accepted' => 1,
+      'picked_up' => 2,
+      'in_transit' => 3,
+      'delivered' => 4,
+      _ => 0, // assigned & anything else
+    };
+    return Row(
+      children: List.generate(4 * 2 - 1, (i) {
+        if (i.isOdd) {
+          return Expanded(child: Container(height: 2, color: (i ~/ 2) < stepIndex ? AppColors.orange : AppColors.gray));
+        }
+        final s = i ~/ 2;
+        final done = s < stepIndex;
+        final current = s == stepIndex;
+        return Container(
+          width: 22, height: 22,
+          decoration: BoxDecoration(
+            color: done || current ? AppColors.orange : AppColors.lightGray,
+            shape: BoxShape.circle,
+          ),
+          child: done
+              ? const Icon(Icons.check, size: 14, color: Colors.white)
+              : Center(
+                  child: Text('${s + 1}', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: current ? Colors.white : AppColors.darkGray)),
+                ),
+        );
+      }),
+    );
+  }
+
+  Widget _buildNextAction(dynamic order, String status, bool isUpdating) {
+    final next = _nextStatus[status];
+    if (next == null) return const SizedBox.shrink();
+    return SizedBox(
+      width: double.infinity,
+      height: 44,
+      child: ElevatedButton.icon(
+        onPressed: isUpdating ? null : () => _advanceOrder(order, next),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.orange,
+          foregroundColor: Colors.white,
+          disabledBackgroundColor: AppColors.orange.withValues(alpha: 0.5),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          elevation: 0,
+        ),
+        icon: isUpdating
+            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white))
+            : Icon(_nextActionIcon[status] ?? Icons.arrow_forward_rounded, size: 18),
+        label: Text(_nextActionLabel[status] ?? next, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800)),
+      ),
+    );
+  }
+
+  /// Single handler for advancing a delivery from the Home cards: confirms
+  /// commitments, calls the API, starts/stops GPS tracking, moves the card
+  /// optimistically and lets the shared feed confirm from the server.
+  Future<void> _advanceOrder(dynamic order, String nextStatus) async {
+    final orderId = (order['id'] ?? '').toString();
+    if (nextStatus == 'accepted') {
+      final confirmed = await PremiumDialogs.showConfirm(
+        context,
+        title: 'Accept Order?',
+        message: 'Pickup: ${order['pickupAddress'] ?? 'Restaurant'}\nDrop: ${order['dropAddress'] ?? 'Customer'}\nFare: Rs.${order['fare'] ?? 0}',
+        confirmText: 'Accept',
+        icon: Icons.local_shipping_rounded,
+      );
+      if (!confirmed || !mounted) return;
+    }
+    if (nextStatus == 'delivered') {
+      final confirmed = await PremiumDialogs.showConfirm(
+        context,
+        title: 'Mark as Delivered?',
+        message: 'Confirm the customer received their order.\nFare earned: Rs.${order['fare'] ?? 0}',
+        confirmText: 'Delivered',
+        icon: Icons.task_alt_rounded,
+      );
+      if (!confirmed || !mounted) return;
+    }
+    _feed.markUpdating(orderId, true);
+    try {
+      await ApiService.updateOrderStatus(orderId, nextStatus);
+      _feed.applyLocalStatus(orderId, nextStatus);
+
+      if (nextStatus == 'accepted' || nextStatus == 'picked_up') {
+        await RiderBackgroundService.startTracking(orderId: orderId);
+        await BackgroundLocationService.setCurrentOrder(orderId);
+      }
+      if (nextStatus == 'delivered' || nextStatus == 'cancelled') {
+        await RiderBackgroundService.stopTracking();
+        await BackgroundLocationService.setCurrentOrder(null);
+      }
+      if (nextStatus == 'delivered') {
+        await PushNotificationService.showOrderNotification(
+          title: '🎉 Delivery Complete!',
+          body: 'Rs.${order['fare'] ?? 0} added to your earnings. Great job!',
+          payload: orderId,
+        );
+      }
+      if (mounted) {
+        if (nextStatus == 'delivered') {
+          showDialog(
+            context: context,
+            barrierDismissible: true,
+            builder: (dialogContext) => DeliveryCelebrationDialog(
+              orderId: orderId,
+              onContinue: () => Navigator.of(dialogContext).pop(),
+              onRateNow: () => Navigator.of(dialogContext).pop(),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(nextStatus == 'accepted' ? 'Order accepted!' : 'Status updated!'),
+              backgroundColor: AppColors.orange,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              margin: const EdgeInsets.all(16),
+            ),
+          );
+        }
+      }
+      _feed.scheduleRefresh();
+    } catch (e) {
+      if (mounted) PremiumDialogs.showError(context, ErrorHelper.getMessage(e));
+    } finally {
+      _feed.markUpdating(orderId, false);
+    }
+  }
+
+  /// Switches the rider bottom-nav to a tab via MainNavigation's global key.
+  /// Falls back to pushing the screen directly when Home is opened outside
+  /// the shell (e.g. deep-links).
+  void _switchToTab(int index, Widget fallback) {
+    final navState = MainNavigation.navKey.currentState;
+    if (navState != null && navState.mounted) {
+      navState.switchToTab(index);
+      return;
+    }
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => fallback));
   }
 
   Widget _buildQuickActions(Color cardColor, Color textColor, Color subTextColor) {
@@ -722,7 +917,7 @@ class _HomeScreenState extends State<HomeScreen>
       children: [
         Expanded(
           child: GestureDetector(
-            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AllOrdersScreen())),
+            onTap: () => _switchToTab(1, const AllOrdersScreen()),
             child: Container(
               padding: const EdgeInsets.all(16),
               decoration: _cardDecoration(cardColor),
@@ -751,7 +946,7 @@ class _HomeScreenState extends State<HomeScreen>
         const SizedBox(width: 12),
         Expanded(
           child: GestureDetector(
-            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const EarningsScreen())),
+            onTap: () => _switchToTab(2, const EarningsScreen()),
             child: Container(
               padding: const EdgeInsets.all(16),
               decoration: _cardDecoration(cardColor),

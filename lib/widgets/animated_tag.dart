@@ -58,9 +58,8 @@ class _AnimatedTagState extends State<AnimatedTag>
         widget.onTap();
       },
       onTapCancel: () => _controller.reverse(),
-      child: AnimatedScale(
-        scale: widget.isSelected ? 1.0 : 1.0,
-        duration: const Duration(milliseconds: 200),
+      child: ScaleTransition(
+        scale: _scaleAnim,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 250),
           curve: Curves.easeOutCubic,

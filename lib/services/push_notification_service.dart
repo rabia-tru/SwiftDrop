@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../theme/app_colors.dart';
 import 'notification_tap_handler.dart';
@@ -7,6 +8,22 @@ class PushNotificationService {
   static final FlutterLocalNotificationsPlugin _notifications = 
       FlutterLocalNotificationsPlugin();
   static bool _initialized = false;
+  static bool _permissionRequested = false;
+
+  /// Android 13+ requires the runtime POST_NOTIFICATIONS permission; without
+  /// it every show() call is silently dropped (no crash, nothing logged).
+  /// Safe to call repeatedly — the OS no-ops if already granted/denied.
+  static Future<void> requestPermissionIfNeeded() async {
+    if (_permissionRequested) return;
+    _permissionRequested = true;
+    try {
+      final android = _notifications.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      await android?.requestNotificationsPermission();
+    } catch (e) {
+      debugPrint('[PushNotification] Permission request failed: $e');
+    }
+  }
 
   /// Initialize notification service
   static Future<void> initialize() async {

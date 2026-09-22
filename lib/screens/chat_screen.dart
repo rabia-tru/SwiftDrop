@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import '../theme/app_colors.dart';
 import '../config/app_config.dart';
@@ -710,7 +708,18 @@ class _ChatScreenState extends State<ChatScreen> {
                 Center(
                   child: InteractiveViewer(
                     maxScale: 4,
-                    child: Image.network(url, fit: BoxFit.contain),
+                    child: Image.network(
+                      url,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => const Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.broken_image_rounded, size: 48, color: Colors.white54),
+                          SizedBox(height: 12),
+                          Text('Image unavailable', style: TextStyle(color: Colors.white54, fontSize: 14)),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
                 SafeArea(

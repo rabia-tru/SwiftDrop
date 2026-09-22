@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 import '../services/chat_unread_service.dart';
 import '../services/api_service.dart';
+import '../services/rider_order_feed.dart';
 import '../services/background_location_service.dart';
 import '../services/rider_background_service.dart';
 import '../widgets/confetti_celebration.dart';
 import '../widgets/premium_dialogs.dart';
+import '../utils/order_time.dart';
 import 'chat_screen.dart';
 
 /// SwiftDrop Orders Screen — Modern & Attractive Design
@@ -17,6 +19,9 @@ class OrdersScreen extends StatefulWidget {
 }
 
 class _OrdersScreenState extends State<OrdersScreen> {
+  // Reads through the shared live feed so Home, Orders and Earnings always
+  // show the same data and refresh together over WebSocket.
+  final RiderOrderFeed _feed = RiderOrderFeed.instance;
   List<dynamic> _orders = [];
   bool _loading = true;
   String? _error;
@@ -48,18 +53,29 @@ class _OrdersScreenState extends State<OrdersScreen> {
   @override
   void initState() {
     super.initState();
-    _loadOrders();
+    _feed.addListener(_onFeedChanged);
+    _feed.refresh();
+    // Seed the local copy immediately from whatever the feed already has.
+    _orders = _feed.orders;
+    _loading = _feed.loading && !_feed.loadedOnce;
   }
 
-  Future<void> _loadOrders() async {
-    setState(() { _loading = true; _error = null; });
-    try {
-      final orders = await ApiService.getMyOrders();
-      setState(() { _orders = orders; _loading = false; });
-    } catch (e) {
-      setState(() { _error = e.toString().replaceAll('Exception: ', ''); _loading = false; });
-    }
+  @override
+  void dispose() {
+    _feed.removeListener(_onFeedChanged);
+    super.dispose();
   }
+
+  void _onFeedChanged() {
+    if (!mounted) return;
+    setState(() {
+      _orders = _feed.orders;
+      _loading = _feed.loading && !_feed.loadedOnce;
+      _error = _feed.loadedOnce ? _feed.error : null;
+    });
+  }
+
+  Future<void> _loadOrders() => _feed.refresh(force: true);
 
   List<dynamic> get _filteredOrders {
     if (_selectedFilter == 'All') return _orders;
@@ -93,6 +109,10 @@ class _OrdersScreenState extends State<OrdersScreen> {
     final orderId = (order['id'] ?? '').toString();
     try {
       await ApiService.updateOrderStatus(orderId, nextStatus);
+      // Move the card instantly here and on the other rider tabs; the
+      // WebSocket event then confirms with a fresh server fetch.
+      _feed.applyLocalStatus(orderId, nextStatus);
+      _feed.scheduleRefresh();
       
       if (nextStatus == 'accepted' || nextStatus == 'picked_up') {
         await RiderBackgroundService.startTracking(orderId: orderId);
@@ -543,7 +563,9 @@ class _OrdersScreenState extends State<OrdersScreen> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        'Order #$shortId',
+                        'Order #$shortId'
+                        // Show clock time right on the card ("11:32 AM")
+                        '${formatOrderClock(order['createdAt']).isNotEmpty ? '  •  ${formatOrderClock(order['createdAt'])}' : ''}',
                         style: TextStyle(fontSize: 12, color: subTextColor),
                       ),
                     ],

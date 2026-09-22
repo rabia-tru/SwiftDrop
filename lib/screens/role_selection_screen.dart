@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../theme/app_colors.dart';
 import 'login_screen.dart';
+import 'register_screen.dart';
 import 'user_login_screen.dart';
 import 'user_register_screen.dart';
 import 'business_login_screen.dart';
@@ -64,7 +65,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen>
   void _navigateToRegister({required bool isRider}) {
     if (isRider) {
       Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const UserRegisterScreen()),
+        MaterialPageRoute(builder: (_) => const RegisterScreen()),
       );
     } else {
       Navigator.of(context).push(
@@ -95,10 +96,8 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen>
       backgroundColor: sheetColor,
       body: FadeTransition(
         opacity: _fadeController,
-        child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          child: Column(
-            children: [
+        child: Column(
+          children: [
               // ─── Brand header (fixed at top) ─────────
               Container(
                 width: double.infinity,
@@ -119,27 +118,12 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen>
                             return Transform.translate(
                               offset: Offset(
                                   0, sin(_floatController.value * pi) * 6),
-                              child: Container(
-                                width: 80,
-                                height: 80,
-                                padding: const EdgeInsets.all(6),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  shape: BoxShape.circle,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black
-                                          .withValues(alpha: 0.18),
-                                      blurRadius: 26,
-                                      offset: const Offset(0, 12),
-                                    ),
-                                  ],
-                                ),
-                                child: ClipOval(
-                                  child: Image.asset(
-                                    'assets/icon/app_icon.png',
-                                    fit: BoxFit.cover,
-                                  ),
+                              child: ClipOval(
+                                child: Image.asset(
+                                  'assets/icon/app_icon.png',
+                                  width: 80,
+                                  height: 80,
+                                  fit: BoxFit.cover,
                                 ),
                               ),
                             );
@@ -164,8 +148,10 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen>
               // ─── Content (centered in remaining space) ───────
               Expanded(
                 child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(22, 6, 22, 0),
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(22, 6, 22, 0),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -252,14 +238,14 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen>
                           ),
                         ),
                       ),
-                      const SizedBox(height: 20),
-                    ],
+                        const SizedBox(height: 20),
+                      ],
                     ),
                   ),
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

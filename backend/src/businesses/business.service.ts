@@ -32,6 +32,10 @@ export class BusinessService {
     const business = this.businessRepo.create({ ...dto, password: hashedPassword });
     const saved = await this.businessRepo.save(business);
 
+    // Tell every connected customer so their home screens show the new
+    // restaurant live (no app restart needed).
+    this.locationGateway.broadcastNewBusiness(saved);
+
     const token = this.jwtService.sign({
       sub: saved.id,
       email: saved.email,

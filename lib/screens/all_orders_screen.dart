@@ -3,6 +3,7 @@ import '../theme/app_colors.dart';
 import '../services/api_service.dart';
 import '../services/error_helper.dart';
 import '../services/chat_unread_service.dart';
+import '../utils/order_time.dart';
 import 'track_order_screen.dart';
 
 /// SwiftDrop All Orders — Search, filter, reorder (Real API data)
@@ -294,14 +295,11 @@ class _AllOrdersScreenState extends State<AllOrdersScreen> {
     final pickup = order['pickupAddress'] ?? 'Pickup';
     final drop = order['dropAddress'] ?? 'Drop';
     final fare = double.tryParse((order['fare'] ?? '0').toString()) ?? 0;
-    final createdAt = order['createdAt'] != null ? DateTime.tryParse(order['createdAt']) : null;
     final orderId = order['id'] ?? '';
     final unreadChats = ChatUnreadService.instance.unreadsFor(orderId.toString());
 
-    String dateStr = '';
-    if (createdAt != null) {
-      dateStr = '${createdAt.day}/${createdAt.month}/${createdAt.year}';
-    }
+    // "21 Sep, 11:32 AM" — local time (was date-only and in UTC before).
+    final dateStr = formatOrderDayTime(order['createdAt']);
 
     return GestureDetector(
       onTap: () {

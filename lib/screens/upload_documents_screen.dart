@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../theme/app_colors.dart';
+import 'main_navigation.dart';
 
 /// Upload Documents Screen — Step 2 of 3 in rider onboarding
 class UploadDocumentsScreen extends StatefulWidget {
@@ -542,8 +543,6 @@ class _EarningsPreviewScreenState extends State<EarningsPreviewScreen> {
 
   // Earnings estimates based on hours
   double get _weeklyEarnings => _hoursPerWeek * 28; // ~Rs.28/hr
-  double get _dailyEarnings => _weeklyEarnings / 7;
-  double get _yearlyEarnings => _weeklyEarnings * 52;
 
   // Weekly chart data
   late List<double> _weeklyData;
@@ -749,12 +748,14 @@ class _EarningsPreviewScreenState extends State<EarningsPreviewScreen> {
     final peakIndex = _weeklyData.indexOf(_weeklyData.reduce((a, b) => a > b ? a : b));
 
     return SizedBox(
-      height: 140,
+      // 160 fits the worst case: peak badge (18) + gap (4) + bar (88) +
+      // gap (8) + day label (~16) = 134 — no more bottom overflow.
+      height: 160,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: List.generate(7, (index) {
           final value = _weeklyData[index];
-          final height = (value / maxVal) * 100;
+          final height = (value / maxVal) * 88;
           final isPeak = index == peakIndex;
 
           return Expanded(
@@ -935,8 +936,14 @@ class _EarningsPreviewScreenState extends State<EarningsPreviewScreen> {
             height: 54,
             child: ElevatedButton(
               onPressed: () {
-                // Finish signup - go to home screen
-                Navigator.of(context).popUntil((route) => route.isFirst);
+                // Finish signup — go straight to the rider home shell.
+                // popUntil(isFirst) lands on the (already-consumed) splash,
+                // which shows a blank screen; pushAndRemoveUntil guarantees
+                // the rider lands on MainNavigation either way.
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (_) => const MainNavigation()),
+                  (route) => false,
+                );
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.orange,

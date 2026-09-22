@@ -13,7 +13,7 @@ class ExitConfirmDialog {
     final result = await showDialog<bool>(
       context: context,
       barrierDismissible: true,
-      barrierColor: Colors.black.withOpacity(0.45),
+      barrierColor: Colors.black.withValues(alpha: 0.45),
       builder: (dialogCtx) => PopScope(
         canPop: true,
         child: Center(
@@ -78,7 +78,7 @@ class _DialogCardState extends State<_DialogCard>
               borderRadius: BorderRadius.circular(24),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.18),
+                  color: Colors.black.withValues(alpha: 0.18),
                   blurRadius: 32,
                   offset: const Offset(0, 12),
                 ),

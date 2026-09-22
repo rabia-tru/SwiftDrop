@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/app_colors.dart';
+import 'map_picker_screen.dart';
 
 /// Saved address model
 class SavedAddress {
@@ -94,6 +95,9 @@ class _AddressScreenState extends State<AddressScreen> {
     final addressController = TextEditingController(text: existing?.address ?? '');
     final detailsController = TextEditingController(text: existing?.details ?? '');
     String selectedLabel = existing?.label ?? 'Home';
+    // Coordinates captured from the map picker (null = typed address only).
+    double? pickedLat = existing?.lat;
+    double? pickedLng = existing?.lng;
 
     showModalBottomSheet(
       context: context,
@@ -162,6 +166,46 @@ class _AddressScreenState extends State<AddressScreen> {
               ),
               const SizedBox(height: 16),
 
+              // Pick on map — opens the full-screen map picker and fills
+              // the address field with the resolved location.
+              GestureDetector(
+                onTap: () async {
+                  final result = await Navigator.of(context).push<Map<String, dynamic>>(
+                    MaterialPageRoute(builder: (_) => MapPickerScreen(
+                      initialLat: existing?.lat,
+                      initialLng: existing?.lng,
+                    )),
+                  );
+                  if (result != null && context.mounted) {
+                    addressController.text = (result[MapPickerScreen.kAddress] ?? '').toString();
+                    pickedLat = (result[MapPickerScreen.kLat] as num?)?.toDouble();
+                    pickedLng = (result[MapPickerScreen.kLng] as num?)?.toDouble();
+                  }
+                },
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  decoration: BoxDecoration(
+                    color: AppColors.orange.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppColors.orange.withValues(alpha: 0.4)),
+                  ),
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.map_rounded, color: AppColors.orange, size: 20),
+                      SizedBox(width: 8),
+                      Text('Choose on Map', style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.orange,
+                      )),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+
               // Address field
               TextField(
                 controller: addressController,
@@ -214,6 +258,8 @@ class _AddressScreenState extends State<AddressScreen> {
                             label: selectedLabel,
                             address: addressController.text.trim(),
                             details: detailsController.text.trim().isNotEmpty ? detailsController.text.trim() : null,
+                            lat: pickedLat,
+                            lng: pickedLng,
                           );
                         }
                       } else {
@@ -222,6 +268,8 @@ class _AddressScreenState extends State<AddressScreen> {
                           label: selectedLabel,
                           address: addressController.text.trim(),
                           details: detailsController.text.trim().isNotEmpty ? detailsController.text.trim() : null,
+                          lat: pickedLat,
+                          lng: pickedLng,
                         ));
                       }
                     });
