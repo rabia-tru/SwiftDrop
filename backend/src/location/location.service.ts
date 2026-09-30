@@ -15,6 +15,16 @@ export class LocationService {
     private locationGateway: LocationGateway,
   ) {}
 
+/** Ops telemetry: client reported repeated OS kills of the BG service.
+   * Logged only (no table yet) — enough for OEM problem detection in
+   * server logs; persist to a metrics store when the need is real. */
+  logServiceKills(riderId: string, killCount: number, windowMinutes: number) {
+    console.warn(
+      `[Revive] Rider ${riderId} reported ${killCount} service kills in ~${windowMinutes}min — OEM kill-loop suspected`,
+    );
+    return { acknowledged: true };
+  }
+
   // Handles batch sync from the rider app's background service.
   // Because the mobile app queues pings locally when offline, a single
   // sync call may contain many pings recorded over the last few minutes/hours.

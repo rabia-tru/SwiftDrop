@@ -1,4 +1,8 @@
+import 'dart:io';
+
 import 'package:geolocator/geolocator.dart';
+
+import 'ios_native_location_service.dart';
 
 class LocationPermissionResult {
   final bool granted;
@@ -13,7 +17,12 @@ class LocationPermissionHelper {
   /// 1. First ask for "while in use" (ACCESS_FINE_LOCATION)
   /// 2. Then separately ask for "allow all the time" (ACCESS_BACKGROUND_LOCATION)
   /// You cannot request both at once — the OS will silently ignore it.
+  ///
+  /// iOS: uses one CLLocationManager.requestAlwaysAuthorization() prompt,
+  /// driven through the native method channel (see AppDelegate.swift).
   static Future<LocationPermissionResult> requestFullAccess() async {
+    if (Platform.isIOS) return _requestIos();
+
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       return LocationPermissionResult(
@@ -61,5 +70,53 @@ class LocationPermissionHelper {
     }
 
     return LocationPermissionResult(true, true, 'Full background access granted.');
+  }
+
+  /// iOS path: the native side calls CLLocationManager.requestAlwaysAuthorization()
+  /// and reports the current status. "Always" is what enables
+  /// allowsBackgroundLocationUpdates to keep GPS flowing while suspended.
+  static Future<LocationPermissionResult> _requestIos() async {
+    final status = await IosNativeLocationService.requestPermissions();
+    switch (status) {
+      case 'always':
+        return LocationPermissionResult(true, true, 'Full background access granted.');
+      case 'whenInUse':
+        // The upgrade prompt was just shown — iOS will callback with the
+        // result. Until "Always" is granted, tracking only works while the
+        // app is on screen.
+        return LocationPermissionResult(
+          true,
+          false,
+          'Only "while using app" granted — for uninterrupted tracking, enable "Location > Always" in Settings.',
+        );
+      case 'notDetermined':
+        return LocationPermissionResult(
+          false,
+          false,
+          'Please allow location access (choose "Always" for background tracking).',
+        );
+      case 'denied':
+        return LocationPermissionResult(
+          false,
+          false,
+          'Location permission denied. Enable it in Settings > Privacy > Location Services.',
+        );
+      case 'restricted':
+        return LocationPermissionResult(
+          false,
+          false,
+          'Location access is restricted on this device (e.g. parental controls).',
+        );
+      default:
+        // Native side unavailable (e.g. hot restart before channel ready)
+        // — fall through to Geolocator so the UI still gets an answer.
+        final p = await Geolocator.checkPermission();
+        final granted = p == LocationPermission.always || p == LocationPermission.whileInUse;
+        return LocationPermissionResult(
+          granted,
+          p == LocationPermission.always,
+          granted ? 'Location access granted.' : 'Location permission not determined.',
+        );
+    }
   }
 }

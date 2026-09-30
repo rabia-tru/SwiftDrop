@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 import '../services/battery_optimization_helper.dart';
 import '../services/location_permission_helper.dart';
 import '../services/background_location_service.dart';
+import '../services/service_watchdog.dart';
 import 'package:geolocator/geolocator.dart';
 
 /// Tracking Settings — Battery optimization, permissions, tracking config
@@ -19,12 +21,31 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
   bool _locationPermissionGranted = false;
   bool _backgroundLocationGranted = false;
   bool _serviceRunning = false;
+  WatchdogStatus? _watchdogStatus;
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
     _loadStatuses();
+    // Refresh heartbeat age periodically so the "last beat" line stays
+    // live while the user stares at this screen.
+    _watchdogRefreshTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (mounted) _refreshWatchdogStatus();
+    });
+  }
+
+  Timer? _watchdogRefreshTimer;
+
+  @override
+  void dispose() {
+    _watchdogRefreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refreshWatchdogStatus() async {
+    final status = await ServiceWatchdog.status();
+    if (mounted) setState(() => _watchdogStatus = status);
   }
 
   Future<void> _loadStatuses() async {
@@ -32,6 +53,12 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
     final permission = await Geolocator.checkPermission();
     final bgPermission = permission == LocationPermission.always;
     final serviceRunning = await BackgroundLocationService.isRunning();
+    WatchdogStatus? watchdogStatus;
+    try {
+      watchdogStatus = await ServiceWatchdog.status();
+    } catch (_) {
+      watchdogStatus = null; // card simply won't render
+    }
 
     if (mounted) {
       setState(() {
@@ -39,6 +66,7 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
         _locationPermissionGranted = permission == LocationPermission.whileInUse || permission == LocationPermission.always;
         _backgroundLocationGranted = bgPermission;
         _serviceRunning = serviceRunning;
+        _watchdogStatus = watchdogStatus;
         _loading = false;
       });
     }
@@ -180,6 +208,11 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
                     // Tracking Service
                     _buildServiceCard(cardColor, textColor, subTextColor),
                     const SizedBox(height: 16),
+                    // Kill-survival watchdog diagnostics (Android only)
+                    if (Platform.isAndroid && _watchdogStatus != null) ...[
+                      _buildWatchdogCard(_watchdogStatus!, cardColor, textColor, subTextColor),
+                      const SizedBox(height: 16),
+                    ],
                     // Manufacturer Guide
                     if (Platform.isAndroid) ...[
                       _buildManufacturerGuide(cardColor, textColor, subTextColor),
@@ -486,6 +519,164 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildWatchdogCard(
+      WatchdogStatus status, Color cardColor, Color textColor, Color subTextColor) {
+    final health = status.health;
+
+    // Verdict line + color per health state.
+    String verdict;
+    Color verdictColor;
+    IconData verdictIcon;
+    switch (health) {
+      case WatchdogHealth.healthy:
+        verdict = 'Protected — will auto-restart if killed';
+        verdictColor = AppColors.statusDelivered;
+        verdictIcon = Icons.verified_user;
+      case WatchdogHealth.stale:
+        verdict = 'Service quiet — restart expected within ~2 min';
+        verdictColor = AppColors.orange;
+        verdictIcon = Icons.schedule;
+      case WatchdogHealth.neverRan:
+        verdict = 'Armed — activates when tracking starts';
+        verdictColor = AppColors.orange;
+        verdictIcon = Icons.shield_outlined;
+      case WatchdogHealth.disarmed:
+        verdict = 'Idle — activates when tracking starts';
+        verdictColor = AppColors.darkGray;
+        verdictIcon = Icons.shield_outlined;
+      case WatchdogHealth.broken:
+        verdict = 'Alarm permission missing — auto-restart disabled!';
+        verdictColor = AppColors.orangeDark;
+        verdictIcon = Icons.gpp_bad;
+      case WatchdogHealth.notApplicable:
+        verdict = 'Not applicable on this platform';
+        verdictColor = AppColors.darkGray;
+        verdictIcon = Icons.info_outline;
+    }
+
+    String beatAgeText;
+    final age = status.lastBeatAge;
+    if (age == null) {
+      beatAgeText = 'never';
+    } else if (age < 1000) {
+      beatAgeText = 'just now';
+    } else if (age < 60000) {
+      beatAgeText = '${age ~/ 1000}s ago';
+    } else {
+      beatAgeText = '${age ~/ 60000}m ${((age % 60000) / 1000).round()}s ago';
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(14),
+        border: health == WatchdogHealth.broken
+            ? Border.all(color: AppColors.orangeDark.withValues(alpha: 0.4))
+            : null,
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 3))],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: verdictColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(health == WatchdogHealth.healthy ? Icons.verified_user : verdictIcon,
+                    color: verdictColor, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Auto-Restart Protection', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: textColor)),
+                    Text(verdict, style: TextStyle(fontSize: 12, color: verdictColor)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _buildWatchdogRow(
+            'Watchdog armed',
+            status.armed ? 'Yes' : 'No',
+            status.armed,
+            subTextColor,
+          ),
+          const SizedBox(height: 6),
+          _buildWatchdogRow(
+            'Exact alarm permission',
+            status.canScheduleExactAlarms ? 'Granted' : 'REVOKED',
+            status.canScheduleExactAlarms,
+            subTextColor,
+          ),
+          const SizedBox(height: 6),
+          _buildWatchdogRow(
+            'Service heartbeat',
+            beatAgeText,
+            age != null && age <= WatchdogStatus.maxHealthyBeatAgeMs,
+            subTextColor,
+          ),
+          if (status.lastBeatAt != null) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const SizedBox(width: 24),
+                Text(
+                  'Last beat: ${TimeOfDay.fromDateTime(status.lastBeatAt!).format(context)}',
+                  style: TextStyle(fontSize: 11, color: subTextColor.withValues(alpha: 0.7)),
+                ),
+              ],
+            ),
+          ],
+          if (health == WatchdogHealth.broken) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => BatteryOptimizationHelper.openBatteryOptimizationSettings(),
+                icon: const Icon(Icons.settings, size: 18),
+                label: const Text('Open Settings to Fix Alarms'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.orangeDark,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWatchdogRow(String label, String value, bool ok, Color subTextColor) {
+    return Row(
+      children: [
+        Icon(
+          ok ? Icons.check_circle : Icons.cancel,
+          color: ok ? AppColors.statusDelivered : AppColors.orangeDark,
+          size: 16,
+        ),
+        const SizedBox(width: 8),
+        Expanded(child: Text(label, style: TextStyle(fontSize: 13, color: subTextColor))),
+        Text(value,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: ok ? AppColors.statusDelivered : AppColors.orangeDark,
+            )),
+      ],
     );
   }
 

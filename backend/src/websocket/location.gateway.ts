@@ -4,10 +4,12 @@ import {
   SubscribeMessage,
   MessageBody,
   ConnectedSocket,
+  OnGatewayInit,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { ChatService } from '../chat/chat.service';
 import { WsValidationException, catchWsError } from '../common/ws-utils';
+import { ServiceReviveService } from '../location/service-revive.service';
 
 // Customer app / admin dashboard connects and joins a room named after
 // the orderId (or riderId) it wants to watch, then receives live pings.
@@ -15,11 +17,20 @@ import { WsValidationException, catchWsError } from '../common/ws-utils';
   cors: { origin: '*' }, // tighten this to your real frontend origin in production
   namespace: '/tracking',
 })
-export class LocationGateway {
+export class LocationGateway implements OnGatewayInit {
   @WebSocketServer()
   server: Server;
 
-  constructor(private readonly chatService: ChatService) {}
+  constructor(
+    private readonly chatService: ChatService,
+    private readonly reviveService: ServiceReviveService,
+  ) {}
+
+  afterInit() {
+    // Let the revive cron emit into rooms through this gateway's Server
+    // without creating a provider cycle (revive → gateway only).
+    this.reviveService.attachGateway(this);
+  }
 
   handleConnection(client: Socket) {
     console.log(`[WS] Client connected: ${client.id}`);

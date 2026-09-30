@@ -67,6 +67,26 @@
             android:foregroundServiceType="location"
             tools:replace="android:exported" />
 
+        <!-- Kill-survival watchdog: checks the service heartbeat on an
+             exact alarm and restarts the service if Android/OEM killed it. -->
+        <receiver
+            android:name=".WatchdogReceiver"
+            android:exported="false" />
+
+        <!-- Boot resume: restarts tracking after device reboot or app
+             update when the persisted job flags say tracking was active.
+             LOCKED_BOOT_COMPLETED is filtered in code (prefs aren't
+             readable before unlock; BOOT_COMPLETED fires after). -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
     </application>
 
     <queries>

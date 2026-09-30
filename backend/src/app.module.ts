@@ -12,25 +12,47 @@ import { CustomersModule } from './customers/customers.module';
 import { BusinessesModule } from './businesses/business.module';
 import { UploadModule } from './upload/upload.module';
 import { ChatModule } from './chat/chat.module';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    ScheduleModule.forRoot(),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        type: 'postgres',
-        host: config.get<string>('DB_HOST', 'localhost'),
-        port: config.get<number>('DB_PORT', 5432),
-        username: config.get<string>('DB_USERNAME', 'postgres'),
-        password: config.get<string>('DB_PASSWORD', 'postgres'),
-        database: config.get<string>('DB_NAME', 'delivery_tracker'),
-        autoLoadEntities: true,
-        // synchronize=true is convenient for dev/demo; switch to migrations
-        // before this ever touches real client data.
-        synchronize: config.get<string>('NODE_ENV') !== 'production',
-      }),
+      useFactory: (config: ConfigService) => {
+        // Managed-host deployment (Railway/Render/Neon/…): DATABASE_URL is the
+        // single source of truth — host, port, user, password and db name all
+        // come from that one postgres:// URL the platform injects.
+        const databaseUrl = config.get<string>('DATABASE_URL');
+        if (databaseUrl) {
+          return {
+            type: 'postgres' as const,
+            url: databaseUrl,
+            // Railway's public TCP proxy requires SSL; its cert is self-signed.
+            ssl: { rejectUnauthorized: false },
+            autoLoadEntities: true,
+            // A fresh Railway Postgres has zero tables — the schema MUST
+            // auto-create on first boot or every request 500s. Same caveat
+            // as the local branch below: move to migrations before real
+            // customer data ever lands here.
+            synchronize: config.get<string>('NODE_ENV') !== 'production',
+          };
+        }
+        return {
+          type: 'postgres' as const,
+          host: config.get<string>('DB_HOST', 'localhost'),
+          port: config.get<number>('DB_PORT', 5432),
+          username: config.get<string>('DB_USERNAME', 'postgres'),
+          password: config.get<string>('DB_PASSWORD', 'postgres'),
+          database: config.get<string>('DB_NAME', 'delivery_tracker'),
+          autoLoadEntities: true,
+          // synchronize=true is convenient for dev/demo; switch to migrations
+          // before this ever touches real client data.
+          synchronize: config.get<string>('NODE_ENV') !== 'production',
+        };
+      },
     }),
     AuthModule,
     RidersModule,

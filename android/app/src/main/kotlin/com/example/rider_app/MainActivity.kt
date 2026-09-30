@@ -1,5 +1,6 @@
 package com.example.rider_app
 
+import android.app.AlarmManager
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
@@ -16,6 +17,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "battery_optimization"
     private val NET_CHANNEL = "network_binding"
+    private val WATCHDOG_CHANNEL = "service_watchdog"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -107,6 +109,46 @@ class MainActivity : FlutterActivity() {
             android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
         )
+
+        // Kill-survival watchdog: Dart arms/disarms the native alarm
+        // chain that restarts the background service if the OS kills it.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, WATCHDOG_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "arm" -> {
+                        try {
+                            getSharedPreferences(WatchdogReceiver.PREFS, Context.MODE_PRIVATE)
+                                .edit().putBoolean(WatchdogReceiver.KEY_ARMED, true).apply()
+                            WatchdogReceiver.scheduleNext(this)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.success(false)
+                        }
+                    }
+                    "disarm" -> {
+                        try {
+                            getSharedPreferences(WatchdogReceiver.PREFS, Context.MODE_PRIVATE)
+                                .edit().putBoolean(WatchdogReceiver.KEY_ARMED, false).apply()
+                            WatchdogReceiver.cancel(this)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.success(false)
+                        }
+                    }
+                    "isArmed" -> {
+                        val armed = getSharedPreferences(WatchdogReceiver.PREFS, Context.MODE_PRIVATE)
+                            .getBoolean(WatchdogReceiver.KEY_ARMED, false)
+                        result.success(armed)
+                    }
+                    "canScheduleExact" -> {
+                        result.success(
+                            Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+                                (getSystemService(Context.ALARM_SERVICE) as AlarmManager).canScheduleExactAlarms()
+                        )
+                    }
+                    else -> result.notImplemented()
+                }
+            }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
             .setMethodCallHandler { call, result ->

@@ -9,7 +9,9 @@ class AppConfig {
   // Multi-phone testing: both phones connect to the PC over WiFi.
   // PC LAN IP: 192.168.100.2 / 192.168.54.240 (run `ipconfig` to check if it changes)
   // USB single-phone testing: use 'http://127.0.0.1:3000/api' + adb reverse
-  static const String apiBaseUrl = 'http://192.168.54.240:3000/api';
+  /// Overridable for tests (test_local_sync_pipeline.dart points this at a
+  /// local HttpServer). Production code keeps the default value.
+  static String apiBaseUrl = 'http://192.168.54.240:3000/api';
 
   /// WebSocket URL is derived from apiBaseUrl by stripping '/api'
   /// e.g. http://192.168.100.121:3000/api → http://192.168.100.121:3000

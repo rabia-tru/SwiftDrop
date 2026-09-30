@@ -277,6 +277,22 @@ class ApiService {
     return data['saved'] as int;
   }
 
+  /// Report that the background service has been killed repeatedly this
+  /// session (client watchdog kept having to restart it). Lets the
+  /// backend flag problem devices / OEMs and, once FCM exists, escalate
+  /// to silent-push revives. Fire-and-forget from the caller's view.
+  static Future<void> reportServiceKills({
+    required int killCount,
+    required int windowMinutes,
+  }) async {
+    final headers = await _authHeaders();
+    await _post(
+      '${AppConfig.apiBaseUrl}/location/service-kills',
+      headers,
+      jsonEncode({'killCount': killCount, 'windowMinutes': windowMinutes}),
+    );
+  }
+
   /// Fetch persisted chat history for an order (oldest first).
   static Future<List<Map<String, dynamic>>> getChatHistory(String orderId) async {
     final res = await _get(

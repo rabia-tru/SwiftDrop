@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -14,6 +16,7 @@ import 'services/notification_tap_handler.dart';
 import 'services/chat_unread_service.dart';
 import 'services/network_binding_service.dart';
 import 'services/rider_notification_service.dart';
+import 'services/service_watchdog.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -67,6 +70,17 @@ void main() async {
     try {
       await CustomerBackgroundService.initialize();
       await CustomerBackgroundService.restoreTrackingState();
+    } catch (_) {}
+
+    try {
+      // Re-arm the kill-survival watchdog after restarts. The native
+      // alarm chain runs outside the app process; if the background
+      // service was killed while the app was closed, this is what brings
+      // protection back online (the receiver itself restarts the service
+      // when it finds the heartbeat stale mid-delivery).
+      if (Platform.isAndroid) {
+        await ServiceWatchdog.ensureArmed();
+      }
     } catch (_) {}
     
     try {

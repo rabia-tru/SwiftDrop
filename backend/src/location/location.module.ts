@@ -14,6 +14,9 @@ import { AuthModule } from '../auth/auth.module';
     WebsocketModule,
     AuthModule,
   ],
+  // NOTE: ServiceReviveService is NOT provided here — it lives in
+  // WebsocketModule (its only consumer, LocationGateway, is there).
+  // Registering it in both modules would run its revive cron twice.
   controllers: [LocationController],
   providers: [LocationService],
 })

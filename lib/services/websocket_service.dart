@@ -1,9 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 // ignore: library_prefixes
 import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
+import 'background_location_service.dart';
 import 'push_notification_service.dart';
+import 'unified_background_service.dart';
 
 /// WebSocket Service — Real-time connection to backend via Socket.IO
 /// Handles order tracking, rider location updates, and status changes
@@ -218,6 +222,18 @@ class WebSocketService {
       _chatTypingController.add(Map<String, dynamic>.from(data));
     });
 
+    // Backend revive signal: the location-gap detector decided this
+    // device's tracking went silent mid-delivery (killed BG service that
+    // the client watchdog failed to bring back). If THIS socket is alive,
+    // the app process survived — so the background service can be
+    // restarted from here. The main isolate then calls ensureRunning()
+    // which cold-starts the plugin's foreground service with the same
+    // persisted flags.
+    _socket!.on('service:revive', (data) {
+      print('[WebSocket] ⚡ Service revive signal received: $data');
+      _handleReviveSignal(data);
+    });
+
     // Business room: new order / any update for THIS business
     _socket!.on('business:newOrder', (data) {
       print('[WebSocket] Business order update: $data');
@@ -275,6 +291,42 @@ class WebSocketService {
     _socket?.emit('unwatchOrder', {'orderId': orderId});
     if (_currentOrderId == orderId) _currentOrderId = null;
     print('[WebSocket] Unwatched order: $orderId');
+  }
+
+  /// Handles a backend revive signal: restart the background service if
+  /// this process can, and acknowledge back so the backend knows the
+  /// channel works (and can stop escalating).
+  Future<void> _handleReviveSignal(dynamic data) async {
+    if (!Platform.isAndroid) return;
+    try {
+      final d = data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
+      final reason = d['reason']?.toString() ?? 'unknown';
+
+      // Only meaningful when at least one job flag is set — otherwise the
+      // backend detected a session that had legitimately ended.
+      final prefs = await SharedPreferences.getInstance();
+      final anyJob = (prefs.getBool(UnifiedBackgroundService.kRiderActive) ?? false) ||
+          (prefs.getBool(UnifiedBackgroundService.kCustomerActive) ?? false) ||
+          (prefs.getBool(UnifiedBackgroundService.kRiderOrderActive) ?? false);
+      if (!anyJob) {
+        print('[WebSocket] Revive ignored — no active tracking jobs');
+        return;
+      }
+
+      await UnifiedBackgroundService.ensureRunning();
+      await BackgroundLocationService.initialize();
+      print('[WebSocket] ✅ Service revived via backend signal (reason: $reason)');
+
+      // Acknowledge delivery so the backend can log successful revives
+      // (and, in the future, escalate to FCM/silent-push if this stops
+      // arriving).
+      _socket?.emit('service:reviveAck', {
+        'reason': reason,
+        'at': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      print('[WebSocket] Revive handling failed: $e');
+    }
   }
 
   void watchRider(String riderId) {

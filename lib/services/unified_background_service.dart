@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'dart:ui';
 import 'package:flutter_background_service/flutter_background_service.dart';
@@ -8,7 +9,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 import '../theme/app_colors.dart';
 import 'api_service.dart';
+import 'adaptive_tracking_policy.dart';
 import 'location_queue_db.dart';
+import 'service_revive_reporter.dart';
+import 'service_watchdog.dart';
 import 'foodpanda_notifications.dart';
 import '../utils/safe_parse.dart';
 
@@ -34,6 +38,10 @@ import '../utils/safe_parse.dart';
 /// ─────────────────────────────────────────────────────────────────────
 class UnifiedBackgroundService {
   static bool _configured = false;
+  /// True once _onStart has run in this process lifetime — used to
+  /// distinguish "first start of this process" (potentially a revived
+  /// start) from subsequent ensureRunning() invocations.
+  static bool _serviceStartedOnce = false;
 
   // Rider GPS tracking flags (read by BackgroundLocationService)
   static const kRiderActive = 'bg_tracking_active';
@@ -95,6 +103,24 @@ class UnifiedBackgroundService {
   static void _onStart(ServiceInstance service) async {
     DartPluginRegistrant.ensureInitialized();
 
+    // Kill telemetry: if tracking flags are set but the service was not
+    // running (i.e. this start came from the watchdog/boot receiver, not
+    // a user action), count it. Repeated kills get reported to the
+    // backend so OEM kill-loops are visible server-side.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final wasTracking = (prefs.getBool(kRiderActive) ?? false) ||
+          (prefs.getBool(kCustomerActive) ?? false) ||
+          (prefs.getBool(kRiderOrderActive) ?? false);
+      final firstStartThisRun = !_serviceStartedOnce;
+      _serviceStartedOnce = true;
+      if (firstStartThisRun) {
+        await ServiceReviveReporter.recordStartup(revivedAfterKill: wasTracking);
+      }
+    } catch (_) {
+      // Telemetry must never break service startup.
+    }
+
     final notifications = FlutterLocalNotificationsPlugin();
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
     await notifications.initialize(const InitializationSettings(android: androidSettings));
@@ -108,6 +134,14 @@ class UnifiedBackgroundService {
     bool notifiedVeryClose = false;
     DateTime? lastImmediateSync;
     bool gpsStreamStarted = false;
+    // Motion-adaptive GPS: mode is recomputed from each fix's speed (see
+    // AdaptiveTrackingPolicy). Switching modes tears the stream down and
+    // rebuilds it with new settings — geolocator's distanceFilter is
+    // fixed at stream creation.
+    var policy = AdaptiveTrackingPolicy();
+    TrackingMode? appliedMode;
+    StreamSubscription<Position>? policyStream;
+    Timer? idleKeepAliveTimer;
     String? chatOrderCustomer; // customer side: watch this order's chat
     String? chatOrderRider;    // rider side: watch this order's chat
     int lastCustomerChatCount = -1; // -1 = unknown (first poll just observes)
@@ -192,8 +226,115 @@ class UnifiedBackgroundService {
       }
     }
 
+    /// Builds/rebuilds the position stream with the mode's accuracy and
+    /// distance filter. Called on stream start and on every mode change.
+    /// Returns the new subscription (null while idle — no live stream).
+    /// (Declared before startGpsStreamIfNeeded: Dart local functions are
+    /// not hoisted, so text order matters.)
+    Future<StreamSubscription<Position>?> startGpsStreamWithCurrentMode() async {
+      await policyStream?.cancel();
+      policyStream = null;
+      idleKeepAliveTimer?.cancel();
+      idleKeepAliveTimer = null;
+      appliedMode = policy.mode;
+
+      // IDLE SLEEP: no live stream at all. One medium-accuracy keep-alive
+      // fix every 2 min re-checks whether the rider started moving. This
+      // is the main battery win — the GPS radio is fully off between
+      // keep-alives instead of streaming fixes every 10 m forever.
+      if (policy.mode == TrackingMode.idle) {
+        idleKeepAliveTimer = Timer.periodic(const Duration(minutes: 2), (_) async {
+          if (riderOrderId == null) return; // tracking stopped — stay asleep
+          try {
+            final fix = await Geolocator.getCurrentPosition(
+              locationSettings: const LocationSettings(
+                accuracy: LocationAccuracy.medium,
+                timeLimit: Duration(seconds: 20),
+              ),
+            );
+            final newMode = policy.onFix(fix.speed);
+            if (newMode != TrackingMode.idle) {
+              // Rider started moving again — bring the live stream back.
+              print('[UnifiedBG] 🔋 Idle → $newMode (movement detected)');
+              await startGpsStreamWithCurrentMode();
+            } else {
+              await LocationQueueDb.enqueue(
+                latitude: fix.latitude,
+                longitude: fix.longitude,
+                speed: fix.speed,
+                accuracy: fix.accuracy,
+                orderId: riderOrderId,
+                recordedAt: DateTime.now(),
+              );
+            }
+          } catch (e) {
+            print('[UnifiedBG] Idle keep-alive fix failed: $e');
+          }
+        });
+        print('[UnifiedBG] 🔋 GPS idle — live stream off, keep-alive every 2 min');
+        return null;
+      }
+
+      final sub = Geolocator.getPositionStream(
+        locationSettings: LocationSettings(
+          accuracy: LocationAccuracy.high,
+          // 10 m while active, 50 m while walking — a slow rider stops
+          // waking the CPU every 10 m.
+          distanceFilter: policy.distanceFilter,
+        ),
+      ).listen(
+        (position) async {
+          // Rider tracking might have been switched off since the stream
+          // started — drop fixes instead of tearing the stream down/up.
+          if (riderOrderId == null) return;
+
+          // Feed speed into the policy; if the mode changed, rebuild the
+          // stream with the new radio settings.
+          final newMode = policy.onFix(position.speed);
+          if (newMode != appliedMode) {
+            print('[UnifiedBG] 🔋 Mode $appliedMode → $newMode '
+                '(filter ${policy.distanceFilter} m)');
+            await startGpsStreamWithCurrentMode();
+            return; // rebuilt stream continues from the next fix
+          }
+
+          await LocationQueueDb.enqueue(
+            latitude: position.latitude,
+            longitude: position.longitude,
+            speed: position.speed,
+            accuracy: position.accuracy,
+            orderId: riderOrderId,
+            recordedAt: DateTime.now(),
+          );
+
+          // Fast-path upload only while actively moving; low-power modes
+          // rely on the periodic batch sync instead.
+          if (policy.shouldFastSync(position.speed)) {
+            final now = DateTime.now();
+            if (lastImmediateSync == null ||
+                now.difference(lastImmediateSync!) > const Duration(seconds: 5)) {
+              lastImmediateSync = now;
+              unawaited(syncLocationToServer());
+            }
+          }
+        },
+        onError: (e) => print('[UnifiedBG] ❌ Position error: $e'),
+      );
+      print('[UnifiedBG] ✅ GPS stream started '
+          '(mode ${policy.mode}, filter ${policy.distanceFilter} m)');
+      policyStream = sub;
+      return sub;
+    }
+
+    /// Starts the GPS stream if it isn't running yet (Android only).
+    /// iOS: the Dart isolate dies when the app is suspended, so real
+    /// background GPS runs NATIVELY via CLLocationManager (see
+    /// AppDelegate.swift, controlled from IosNativeLocationService) —
+    /// starting this stream there would only duplicate pings while the
+    /// app is open.
     Future<void> startGpsStreamIfNeeded() async {
       if (gpsStreamStarted) return;
+      if (!Platform.isAndroid) return;
 
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
@@ -207,35 +348,17 @@ class UnifiedBackgroundService {
       }
 
       gpsStreamStarted = true;
-      Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          distanceFilter: 10,
-        ),
-      ).listen(
-        (position) async {
-          // Rider tracking might have been switched off since the stream
-          // started — drop fixes instead of tearing the stream down/up.
-          if (riderOrderId == null) return;
+      policyStream = await startGpsStreamWithCurrentMode();
+    }
 
-          await LocationQueueDb.enqueue(
-            latitude: position.latitude,
-            longitude: position.longitude,
-            speed: position.speed,
-            accuracy: position.accuracy,
-            orderId: riderOrderId,
-            recordedAt: DateTime.now(),
-          );
-
-          final now = DateTime.now();
-          if (lastImmediateSync == null || now.difference(lastImmediateSync!) > const Duration(seconds: 5)) {
-            lastImmediateSync = now;
-            unawaited(syncLocationToServer());
-          }
-        },
-        onError: (e) => print('[UnifiedBG] ❌ Position error: $e'),
-      );
-      print('[UnifiedBG] ✅ GPS position stream started');
+    /// Stops the GPS radio completely (mode teardown or tracking off).
+    Future<void> stopGpsStream() async {
+      await policyStream?.cancel();
+      policyStream = null;
+      idleKeepAliveTimer?.cancel();
+      idleKeepAliveTimer = null;
+      appliedMode = null;
+      gpsStreamStarted = false;
     }
 
     double calcDistanceMeters(double lat1, double lon1, double lat2, double lon2) {
@@ -671,17 +794,37 @@ class UnifiedBackgroundService {
       }
     }
 
+    // Kill-survival watchdog: beat a heartbeat the native alarm chain can
+    // use to detect "service was killed mid-delivery" and restart it.
+    // Arming is idempotent; the receiver self-disarms once no job flags
+    // are set, so a stale arm never resurrects an ended session.
+    if (Platform.isAndroid) {
+      await ServiceWatchdog.ensureArmed();
+      await ServiceWatchdog.beat();
+      Timer.periodic(ServiceWatchdog.beatInterval, (_) async {
+        await ServiceWatchdog.beat();
+      });
+    }
+
     // Fast tick: pick up flag changes, keep the GPS stream alive, refresh
     // the single foreground notification.
     Timer.periodic(const Duration(seconds: 5), (_) async {
       await refreshFlags();
-      if (riderOrderId != null) await startGpsStreamIfNeeded();
+      if (riderOrderId != null) {
+        await startGpsStreamIfNeeded();
+      } else if (gpsStreamStarted) {
+        // Tracking toggled off — actually stop the GPS radio now instead
+        // of letting the stream run and drop every fix (battery leak).
+        await stopGpsStream();
+      }
       await updateForegroundNotification();
     });
 
     // Rider GPS batch sync — matches AppConfig.locationSyncIntervalSeconds.
+    // Android only: on iOS uploads go through the native background
+    // URLSession instead (this SQLite queue stays empty there).
     Timer.periodic(Duration(seconds: AppConfig.locationSyncIntervalSeconds), (_) async {
-      if (riderOrderId != null) await syncLocationToServer();
+      if (riderOrderId != null && Platform.isAndroid) await syncLocationToServer();
     });
 
     // Customer ETA polling.
@@ -739,6 +882,8 @@ class UnifiedBackgroundService {
     if (!await service.isRunning()) return;
 
     if (!riderActive && !customerActive && !riderOrderActive && !chatWatching) {
+      // Last job ended — disarm the watchdog so the alarm chain stops.
+      await ServiceWatchdog.disarm();
       service.invoke('stopService');
     } else {
       service.invoke('refresh');
